@@ -1,33 +1,37 @@
+"""
+Indoor Positioning System - Positioning Evaluations Module
+
+Этот модуль реализует вычисления для позиционирования в помещении.
+Обрабатывает данные от ESP32 якорей и вычисляет позиции устройств
+"""
+
 import numpy as np
 import logging
+from typing import Dict, List, Tuple, Optional, Any
 
 logger = logging.getLogger(__name__)
 
 
 class TrilaterationEngine:
-    def __init__(self, room_config):
+    """Движок для расчета позиции в 3D-пространстве методом трилатерации."""
+
+    def __init__(self, room_config: Dict[str, Any]) -> None:
         self.room_config = room_config
 
-    def calculate_position(self, anchor_distances):
-        """Основная функция расчета позиции с автоматическим выбором метода"""
+    def calculate_position(self, anchor_distances: Dict[str, float]) -> Optional[Dict[str, float]]:
+        """Основная функция расчета позиции с автоматическим выбором метода."""
         try:
             if len(anchor_distances) < 2:
                 return None
 
             print(f"🎯 Начало расчета позиции для {len(anchor_distances)} якорей")
 
-            # Пробуем 3D трилатерацию
+            # Пробуем последовательно разные методы
             position = self.trilateration_3d(anchor_distances)
-
-            # Если 3D не сработала, пробуем 2D+
             if not position or not self.is_valid_position(position):
                 position = self.trilateration_2d_plus(anchor_distances)
-
-            # Если и это не сработало, используем геометрический метод
             if not position or not self.is_valid_position(position):
                 position = self.simple_geometric_method_3d(anchor_distances)
-
-            # Корректируем позицию если она вне комнаты
             if position and not self.is_valid_position(position):
                 position = self.correct_position(position)
 
@@ -37,15 +41,15 @@ class TrilaterationEngine:
             logger.error(f"Ошибка расчета позиции: {e}")
             return None
 
-    def trilateration_3d(self, anchor_distances):
-        """3D трилатерация методом наименьших квадратов"""
+    def trilateration_3d(self, anchor_distances: Dict[str, float]) -> Optional[Dict[str, float]]:
+        """3D трилатерация методом наименьших квадратов (требуется минимум 3 якоря)."""
         try:
             anchors_list, distances_list = self._prepare_anchor_data(anchor_distances)
 
             if len(anchors_list) < 3:
                 return None
 
-            # Проверяем вариацию высот
+            # Проверяем достаточность вариации высот для 3D расчета
             z_coords = [anchor[2] for anchor in anchors_list]
             z_variation = max(z_coords) - min(z_coords)
 
@@ -54,8 +58,6 @@ class TrilaterationEngine:
                 return None
 
             print("📍 Используем 3D трилатерацию")
-
-            # 3D трилатерация
             A_linear, b = self._build_linear_system_3d(anchors_list, distances_list)
 
             if np.linalg.matrix_rank(A_linear) < 3:
@@ -80,8 +82,8 @@ class TrilaterationEngine:
             logger.debug(f"3D трилатерация не удалась: {e}")
             return None
 
-    def trilateration_2d_plus(self, anchor_distances):
-        """2D трилатерация с оценкой Z-координаты"""
+    def trilateration_2d_plus(self, anchor_distances: Dict[str, float]) -> Optional[Dict[str, float]]:
+        """2D трилатерация с интеллектуальной оценкой Z-координаты."""
         try:
             anchors_list, distances_list = self._prepare_anchor_data(anchor_distances, use_2d=True)
 
@@ -89,8 +91,6 @@ class TrilaterationEngine:
                 return None
 
             print("📍 Используем 2D+ трилатерацию")
-
-            # 2D трилатерация
             A, b = self._build_linear_system_2d(anchors_list, distances_list)
 
             if np.linalg.matrix_rank(A) < 2:
@@ -102,7 +102,6 @@ class TrilaterationEngine:
             if np.any(np.isnan(position_2d)):
                 return None
 
-            # Оцениваем Z-координату
             z_coordinate = self._estimate_smart_z_coordinate(position_2d[0], position_2d[1], anchor_distances)
 
             result = {
@@ -118,8 +117,8 @@ class TrilaterationEngine:
             logger.debug(f"2D+ трилатерация не удалась: {e}")
             return None
 
-    def simple_geometric_method_3d(self, anchor_distances):
-        """Упрощенный геометрический метод расчета 3D позиции"""
+    def simple_geometric_method_3d(self, anchor_distances: Dict[str, float]) -> Optional[Dict[str, float]]:
+        """Упрощенный геометрический метод расчета 3D позиции (резервный метод)."""
         try:
             print("🔄 Используем упрощенный 3D геометрический метод")
 
@@ -150,8 +149,6 @@ class TrilaterationEngine:
                 x = x_sum / total_weight
                 y = y_sum / total_weight
                 z = z_sum / total_weight
-
-                # Корректируем Z
                 z = self._estimate_smart_z_coordinate(x, y, anchor_distances)
 
                 result = {'x': x, 'y': y, 'z': z}
@@ -164,8 +161,9 @@ class TrilaterationEngine:
             logger.debug(f"Геометрический метод не удался: {e}")
             return {'x': 10.0, 'y': 7.5, 'z': 1.5}  # Fallback позиция
 
-    def _prepare_anchor_data(self, anchor_distances, use_2d=False):
-        """Подготавливает данные якорей для трилатерации"""
+    def _prepare_anchor_data(self, anchor_distances: Dict[str, float], use_2d: bool = False) -> Tuple[
+        List[List[float]], List[float]]:
+        """Подготавливает данные якорей для трилатерации."""
         anchors_list = []
         distances_list = []
 
@@ -181,8 +179,9 @@ class TrilaterationEngine:
 
         return anchors_list, distances_list
 
-    def _build_linear_system_3d(self, anchors_list, distances_list):
-        """Строит линейную систему для 3D трилатерации"""
+    def _build_linear_system_3d(self, anchors_list: List[List[float]], distances_list: List[float]) -> Tuple[
+        np.ndarray, np.ndarray]:
+        """Строит линейную систему уравнений для 3D трилатерации."""
         A_linear = []
         b = []
 
@@ -200,8 +199,9 @@ class TrilaterationEngine:
 
         return np.array(A_linear), np.array(b)
 
-    def _build_linear_system_2d(self, anchors_list, distances_list):
-        """Строит линейную систему для 2D трилатерации"""
+    def _build_linear_system_2d(self, anchors_list: List[List[float]], distances_list: List[float]) -> Tuple[
+        np.ndarray, np.ndarray]:
+        """Строит линейную систему уравнений для 2D трилатерации."""
         A = []
         b = []
 
@@ -219,10 +219,9 @@ class TrilaterationEngine:
 
         return np.array(A), np.array(b)
 
-    def _estimate_smart_z_coordinate(self, x, y, anchor_distances):
-        """Умная оценка Z-координаты на основе контекста"""
+    def _estimate_smart_z_coordinate(self, x: float, y: float, anchor_distances: Dict[str, float]) -> float:
+        """Интеллектуальная оценка Z-координаты на основе контекста."""
         try:
-            # Собираем информацию о якорях
             anchors_info = []
             for anchor_id, distance in anchor_distances.items():
                 if anchor_id in self.room_config['anchors']:
@@ -240,7 +239,7 @@ class TrilaterationEngine:
 
             avg_z = z_weighted / total_weight if total_weight > 0 else 1.5
 
-            # Корректируем based на позиции
+            # Корректируем based на позиции (близость к стенам)
             close_to_wall = (x < 2.0 or x > self.room_config['width'] - 2 or
                              y < 2.0 or y > self.room_config['height'] - 2)
 
@@ -257,8 +256,8 @@ class TrilaterationEngine:
             print(f"   ⚠️  Ошибка оценки Z, используем значение по умолчанию: {e}")
             return 1.5
 
-    def is_valid_position(self, position):
-        """Проверяет, что позиция находится в пределах комнаты"""
+    def is_valid_position(self, position: Dict[str, float]) -> bool:
+        """Проверяет, что позиция находится в пределах комнаты."""
         x, y, z = position['x'], position['y'], position['z']
         valid = (0 <= x <= self.room_config['width'] and
                  0 <= y <= self.room_config['height'] and
@@ -269,8 +268,8 @@ class TrilaterationEngine:
 
         return valid
 
-    def correct_position(self, position):
-        """Корректирует позицию чтобы она была внутри комнаты"""
+    def correct_position(self, position: Dict[str, float]) -> Dict[str, float]:
+        """Корректирует позицию чтобы она была внутри комнаты."""
         x = max(0.5, min(self.room_config['width'] - 0.5, position['x']))
         y = max(0.5, min(self.room_config['height'] - 0.5, position['y']))
         z = max(0.5, min(3.0, position['z']))
@@ -280,8 +279,8 @@ class TrilaterationEngine:
         return corrected
 
 
-def calculate_confidence(anchor_distances, position):
-    """Вычисляет уверенность в расчете позиции"""
+def calculate_confidence(anchor_distances: Dict[str, float], position: Dict[str, float]) -> float:
+    """Вычисляет уверенность в расчете позиции на основе дисперсии расстояний и количества якорей."""
     try:
         variance = np.var(list(anchor_distances.values()))
         confidence = max(0.1, 1.0 - variance / 10.0)
