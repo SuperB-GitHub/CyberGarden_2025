@@ -1,9 +1,9 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="ru">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Enhanced Indoor Positioning System</title>
+    <title>Улучшенная система позиционирования в помещении</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
 </head>
@@ -11,22 +11,26 @@
     <div class="container">
         <!-- Header -->
         <header class="header">
-            <h1>🏠 Enhanced Indoor Positioning System</h1>
+            <h1>🏠 Улучшенная система позиционирования в помещении</h1>
             <div class="status-bar">
                 <div class="status-item">
-                    <span class="status-label">System Status:</span>
-                    <span id="system-status" class="status-value status-online">ONLINE</span>
+                    <span class="status-label">Статус системы:</span>
+                    <span id="system-status" class="status-value status-online">ОНЛАЙН</span>
                 </div>
                 <div class="status-item">
-                    <span class="status-label">Active Clients:</span>
+                    <span class="status-label">Активные клиенты:</span>
                     <span id="clients-count" class="status-value">0</span>
                 </div>
                 <div class="status-item">
-                    <span class="status-label">Position Updates:</span>
+                    <span class="status-label">Активные подключения:</span>
+                    <span id="connections-count" class="status-value">0</span>
+                </div>
+                <div class="status-item">
+                    <span class="status-label">Обновления позиций:</span>
                     <span id="updates-count" class="status-value">0</span>
                 </div>
                 <div class="status-item">
-                    <span class="status-label">Cycle Count:</span>
+                    <span class="status-label">Счетчик циклов:</span>
                     <span id="cycle-count" class="status-value">0</span>
                 </div>
             </div>
@@ -36,23 +40,23 @@
         <div class="main-content">
             <!-- Left Panel - Map & Controls -->
             <div class="map-container">
-                <h2>📍 Real-time Positioning Map</h2>
+                <h2>📍 Карта позиционирования в реальном времени</h2>
 
                 <div class="controls">
                     <button class="btn btn-primary" id="start-sim" onclick="startSimulation()">
-                        ▶ Start Simulation
+                        ▶ Запустить симуляцию
                     </button>
                     <button class="btn btn-danger" id="stop-sim" onclick="stopSimulation()">
-                        ⏹ Stop Simulation
+                        ⏹ Остановить симуляцию
                     </button>
                     <button class="btn btn-success" id="add-robot" onclick="addRobot()">
-                        🤖 Add Robot
+                        🤖 Добавить робота
                     </button>
                     <button class="btn btn-info" id="add-human" onclick="addHuman()">
-                        👤 Add Human
+                        👤 Добавить оператора
                     </button>
                     <button class="btn btn-warning" id="reset-btn" onclick="resetSystem()">
-                        🔄 Reset System
+                        🔄 Сбросить систему
                     </button>
                 </div>
 
@@ -65,43 +69,24 @@
             <div class="info-panel">
                 <!-- Connected Clients -->
                 <div class="info-section">
-                    <h3>👥 Connected Clients</h3>
+                    <h3>👥 Подключенные клиенты</h3>
                     <div id="clients-list" class="clients-list">
                         <!-- Clients will be populated dynamically -->
                     </div>
                 </div>
 
-                <!-- System Statistics -->
-                <div class="info-section">
-                    <h3>📊 System Statistics</h3>
-                    <div id="statistics-panel">
-                        <div class="status-item">
-                            <span class="status-label">Active Connections:</span>
-                            <span id="connections-count" class="status-value">0</span>
-                        </div>
-                        <div class="status-item">
-                            <span class="status-label">Total Updates:</span>
-                            <span id="total-updates" class="status-value">0</span>
-                        </div>
-                        <div class="status-item">
-                            <span class="status-label">System Errors:</span>
-                            <span id="errors-count" class="status-value">0</span>
-                        </div>
-                    </div>
-                </div>
-
                 <!-- Quick Actions -->
                 <div class="info-section">
-                    <h3>⚡ Quick Actions</h3>
+                    <h3>⚡ Быстрые действия</h3>
                     <div class="quick-actions">
                         <button class="btn btn-small btn-success" onclick="addMultipleRobots(3)">
-                            +3 Robots
+                            +3 Робота
                         </button>
                         <button class="btn btn-small btn-info" onclick="addMultipleHumans(2)">
-                            +2 Humans
+                            +2 Оператора
                         </button>
                         <button class="btn btn-small btn-warning" onclick="removeAllClients()">
-                            Remove All
+                            Удалить всех
                         </button>
                     </div>
                 </div>
@@ -109,15 +94,15 @@
                 <!-- System Log -->
                 <div class="info-section">
                     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
-                        <h3>📋 System Log</h3>
+                        <h3>📋 Системный лог</h3>
                         <button class="btn btn-small btn-secondary" onclick="clearLog()" style="padding: 5px 10px; font-size: 0.8em;">
-                            Clear
+                            Очистить
                         </button>
                     </div>
                     <div id="system-log" class="system-log">
                         <div class="log-entry">
                             <span class="log-time" id="start-time"></span>
-                            <span class="log-message log-type-info">System initialized and ready</span>
+                            <span class="log-message log-type-info">Система инициализирована и готова к работе</span>
                         </div>
                     </div>
                 </div>

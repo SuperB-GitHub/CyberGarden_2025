@@ -1,6 +1,5 @@
 from flask import Flask, render_template, request, jsonify
 from flask_socketio import SocketIO, emit
-import json
 import time
 import threading
 from datetime import datetime
@@ -9,14 +8,19 @@ import math
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'indoor_nav_secret'
-socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
+
+socketio = SocketIO(app,
+                    cors_allowed_origins="*",
+                    async_mode='threading',
+                    logger=True,
+                    engineio_logger=True)
 
 # Хранилище данных системы
 anchors = {}
 clients = {}
 positions = {}
 system_status = {
-    'is_running': True,
+    'is_running': False,
     'start_time': datetime.now().isoformat(),
     'update_interval': 100,
     'cycle_count': 0,
@@ -28,10 +32,10 @@ room_config = {
     'width': 20,
     'height': 15,
     'anchors': {
-        'Anchor_1': {'x': 0, 'y': 0, 'z': 2.5},
-        'Anchor_2': {'x': 20, 'y': 0, 'z': 2.5},
-        'Anchor_3': {'x': 20, 'y': 15, 'z': 2.5},
-        'Anchor_4': {'x': 0, 'y': 15, 'z': 2.5}
+        'Якорь_1': {'x': 0, 'y': 0, 'z': 2.5},
+        'Якорь_2': {'x': 20, 'y': 0, 'z': 2.5},
+        'Якорь_3': {'x': 20, 'y': 15, 'z': 2.5},
+        'Якорь_4': {'x': 0, 'y': 15, 'z': 2.5}
     }
 }
 
@@ -91,7 +95,7 @@ def control_system():
             positions.clear()
         statistics['position_updates'] = 0
         socketio.emit('system_reset')
-        emit_log('System has been completely reset', 'info')
+        emit_log('Система была полностью сброшена', 'info')
         return jsonify({'status': 'system_reset'})
 
     return jsonify({'error': 'unknown_command'})
@@ -102,7 +106,7 @@ def control_system():
 def handle_connect():
     statistics['connections'] += 1
     client_ip = request.remote_addr
-    print(f'📡 Client connected: {request.sid} from {client_ip}')
+    print(f'📡 Клиент подключился: {request.sid} с {client_ip}')
 
     # Отправляем текущее состояние новому клиенту
     emit('system_status', system_status)
@@ -111,15 +115,14 @@ def handle_connect():
     emit('positions_data', positions)
     emit('statistics_update', statistics)
 
-    emit_log(f'New client connected from {client_ip}', 'info')
+    emit_log(f'Новый клиент подключился с {client_ip}', 'info')
 
 
 @socketio.on('disconnect')
 def handle_disconnect():
     statistics['connections'] = max(0, statistics['connections'] - 1)
-    print(f'📡 Client disconnected: {request.sid}')
-
-    emit_log('Client disconnected', 'warning')
+    print(f'📡 Клиент отключился: {request.sid}')
+    emit_log('Клиент отключился', 'warning')
 
 
 @socketio.on('start_simulation')
@@ -129,12 +132,13 @@ def handle_start_simulation(data=None):
 
     with simulation_lock:
         if simulation_running:
-            emit_log('Simulation is already running', 'warning')
+            emit_log('Симуляция уже запущена', 'warning')
             return {'status': 'already_running'}
 
         simulation_running = True
+        system_status['is_running'] = True
 
-    print("🚀 Starting automatic simulation")
+    print("🚀 Запуск автоматической симуляции")
 
     # Регистрируем маяки если их нет
     for anchor_id, coords in room_config['anchors'].items():
@@ -147,15 +151,17 @@ def handle_start_simulation(data=None):
 
     socketio.emit('anchors_data', anchors)
 
-    # Создаем начальных клиентов
-    add_client('Robot_1', 'robot')
-    add_client('Operator_Ivan', 'human')
+    # Создаем начальных клиентов если их нет
+    if 'Робот_1' not in clients:
+        add_client('Робот_1', 'robot')
+    if 'Оператор_Иван' not in clients:
+        add_client('Оператор_Иван', 'human')
 
     # Запускаем поток симуляции
     simulation_thread = threading.Thread(target=simulation_worker, daemon=True)
     simulation_thread.start()
 
-    emit_log('Simulation started with Robot_1 and Operator_Ivan', 'success')
+    emit_log('Симуляция запущена с Робот_1 и Оператор_Иван', 'success')
     return {'status': 'started'}
 
 
@@ -166,29 +172,28 @@ def handle_stop_simulation(data=None):
 
     with simulation_lock:
         simulation_running = False
+        system_status['is_running'] = False
 
-    print("🛑 Stopping automatic simulation")
-    emit_log('Simulation stopped - all movement frozen', 'info')
+    print("🛑 Остановка автоматической симуляции")
+    emit_log('Симуляция остановлена - все движения заморожены', 'info')
     return {'status': 'stopped'}
 
 
 @socketio.on('add_robot')
 def handle_add_robot(data=None):
     """Добавление нового робота"""
-    robot_id = f'Robot_{len(clients) + 1}'
+    robot_id = f'Робот_{len(clients) + 1}'
     add_client(robot_id, 'robot')
-
-    emit_log(f'Robot {robot_id} added to system', 'success')
+    emit_log(f'Робот {robot_id} добавлен в систему', 'success')
     return {'status': 'added', 'device_id': robot_id}
 
 
 @socketio.on('add_human')
 def handle_add_human(data=None):
     """Добавление нового человека"""
-    human_id = f'Operator_{len(clients) + 1}'
+    human_id = f'Оператор_{len(clients) + 1}'
     add_client(human_id, 'human')
-
-    emit_log(f'Human {human_id} added to system', 'success')
+    emit_log(f'Человек {human_id} добавлен в систему', 'success')
     return {'status': 'added', 'device_id': human_id}
 
 
@@ -196,14 +201,15 @@ def handle_add_human(data=None):
 def handle_remove_client(data):
     """Удаление клиента из системы"""
     device_id = data.get('device_id')
+
     with simulation_lock:
         if device_id in clients:
             del clients[device_id]
-            if device_id in positions:
-                del positions[device_id]
+        if device_id in positions:
+            del positions[device_id]
 
     socketio.emit('client_removed', {'device_id': device_id})
-    emit_log(f'Client {device_id} removed from system', 'info')
+    emit_log(f'Клиент {device_id} удален из системы', 'info')
     return {'status': 'removed', 'device_id': device_id}
 
 
@@ -231,7 +237,7 @@ def add_client(device_id, client_type):
             'client_type': client_type
         }
 
-    # Немедленно отправляем позицию клиенту
+    # Отправляем обновление всем клиентам
     socketio.emit('position_update', {
         'device_id': device_id,
         'position': position,
@@ -261,11 +267,9 @@ def move_client(device_id):
 
     # Разная логика движения для роботов и людей
     if client_type == 'robot':
-        # Роботы движутся более предсказуемо
         angle = random.uniform(0, 2 * math.pi)
         distance = random.uniform(0.3, 1.5)
     else:
-        # Люди движутся более случайно
         angle = random.uniform(0, 2 * math.pi)
         distance = random.uniform(0.1, 2.0)
 
@@ -299,10 +303,10 @@ def emit_log(message, log_type='info'):
 
 # Рабочий поток симуляции
 def simulation_worker():
-    """Фоновая работа симуляции - ОПТИМИЗИРОВАННАЯ ВЕРСИЯ"""
+    """Фоновая работа симуляции - ОПТИМИЗИРОВАННАЯ ДЛЯ WINDOWS"""
     global simulation_running
 
-    emit_log('Simulation worker started', 'info')
+    emit_log('Рабочий процесс симуляции запущен', 'info')
 
     cycle = 0
     last_stat_update = 0
@@ -312,7 +316,6 @@ def simulation_worker():
             cycle += 1
 
             # Быстрое обновление позиций
-            client_ids = []
             with simulation_lock:
                 if not simulation_running:
                     break
@@ -334,35 +337,42 @@ def simulation_worker():
                         confidence = positions[device_id]['confidence']
                         client_type = clients[device_id]['type']
 
-                    # Быстрая отправка обновления
+                    # Отправка обновления
                     socketio.emit('position_update', {
                         'device_id': device_id,
                         'position': new_position,
                         'timestamp': datetime.now().isoformat(),
                         'confidence': confidence,
                         'client_type': client_type
-                    }, skip_sid=None)
+                    })
 
-            # Обновляем статистику каждые 3 секунды (а не каждый цикл)
+            # Обновляем статистику каждые 3 секунды
             current_time = time.time()
             if current_time - last_stat_update >= 3:
                 socketio.emit('system_status', system_status)
                 socketio.emit('statistics_update', statistics)
                 last_stat_update = current_time
 
-            # Короткая пауза для отзывчивости
-            time.sleep(0.3)  # 300ms - плавное движение
+            # Более длинная пауза для стабильности на Windows
+            time.sleep(1.0)  # 1 секунда - для стабильности
 
     except Exception as e:
         statistics['errors'] += 1
-        print(f"Simulation error: {e}")
-        emit_log(f'Simulation error: {str(e)}', 'error')
+        print(f"Ошибка симуляции: {e}")
+        emit_log(f'Ошибка симуляции: {str(e)}', 'error')
 
-    emit_log('Simulation worker stopped', 'info')
+    emit_log('Рабочий процесс симуляции остановлен', 'info')
 
 
 if __name__ == '__main__':
-    print("🚀 Starting OPTIMIZED Indoor Positioning Server...")
-    print("📊 Web interface: http://localhost:5000")
-    print("⚡ Features: Fast response + Smooth movement")
-    socketio.run(app, host='0.0.0.0', port=5000, debug=True)
+    print("🚀 Запуск оптимизированного сервера позиционирования для Windows...")
+    print("📊 Веб-интерфейс: http://localhost:5000")
+    print("⚡ Особенности: Стабильная работа на Windows + Поддержка множественных подключений")
+    print("💡 Используется режим threading для совместимости с Windows")
+
+    socketio.run(app,
+                 host='0.0.0.0',
+                 port=5000,
+                 debug=False,
+                 use_reloader=False,
+                 allow_unsafe_werkzeug=True)

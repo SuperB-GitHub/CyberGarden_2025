@@ -7,6 +7,7 @@ class EnhancedPositioningApp {
         };
         this.clients = new Map();
         this.positions = new Map();
+        this.anchorsRendered = false; // Флаг для отслеживания отрисованных якорей
 
         this.init();
     }
@@ -22,37 +23,56 @@ class EnhancedPositioningApp {
     setupSocketListeners() {
         // Connection events
         this.socket.on('connect', () => {
-            this.addLog('Connected to positioning server', 'success');
-            this.updateSystemStatus('ONLINE');
+            this.addLog('Подключено к серверу позиционирования', 'success');
+            this.updateSystemStatus('ОНЛАЙН');
         });
 
         this.socket.on('disconnect', () => {
-            this.addLog('Disconnected from server', 'warning');
-            this.updateSystemStatus('OFFLINE');
+            this.addLog('Отключено от сервера', 'warning');
+            this.updateSystemStatus('ОФФЛАЙН');
+        });
+
+        // Error handlers
+        this.socket.on('connect_error', (error) => {
+            console.error('Ошибка подключения:', error);
+            this.addLog('Ошибка подключения: ' + error.message, 'error');
+            this.updateSystemStatus('ОФФЛАЙН');
+        });
+
+        this.socket.on('reconnect_attempt', () => {
+            console.log('Попытка переподключения...');
+            this.addLog('Переподключение к серверу...', 'warning');
+        });
+
+        this.socket.on('reconnect', () => {
+            console.log('Успешно переподключено');
+            this.addLog('Переподключено к серверу', 'success');
+            this.updateSystemStatus('ОНЛАЙН');
         });
 
         // Data events
         this.socket.on('anchors_data', (anchors) => {
+            console.log('📌 Данные якорей получены:', anchors);
             this.renderAnchors(anchors);
         });
 
         this.socket.on('clients_data', (clients) => {
-            console.log('📋 Clients data received:', clients);
+            console.log('📋 Данные клиентов получены:', clients);
             this.updateClientsData(clients);
         });
 
         this.socket.on('positions_data', (positions) => {
-            console.log('📍 Positions data received:', positions);
+            console.log('📍 Данные позиций получены:', positions);
             this.updatePositionsData(positions);
         });
 
         this.socket.on('position_update', (data) => {
-            console.log('🔄 Position update:', data);
+            console.log('🔄 Обновление позиции:', data);
             this.handlePositionUpdate(data);
         });
 
         this.socket.on('client_removed', (data) => {
-            console.log('🗑️ Client removed:', data);
+            console.log('🗑️ Клиент удален:', data);
             this.removeClientFromUI(data.device_id);
         });
 
@@ -74,20 +94,20 @@ class EnhancedPositioningApp {
             this.positions.clear();
             this.renderClientsList();
             this.renderMap();
-            this.addLog('System has been reset', 'info');
+            this.addLog('Система была сброшена', 'info');
         });
     }
 
     updateClientsData(clients) {
         this.clients = new Map(Object.entries(clients));
-        console.log('📊 Clients updated:', this.clients.size);
+        console.log('📊 Клиенты обновлены:', this.clients.size);
         this.renderClientsList();
         this.updateClientsCount();
     }
 
     updatePositionsData(positions) {
         this.positions = new Map(Object.entries(positions));
-        console.log('📊 Positions updated:', this.positions.size);
+        console.log('📊 Позиции обновлены:', this.positions.size);
         this.renderMap();
         this.renderClientsList();
     }
@@ -115,43 +135,55 @@ class EnhancedPositioningApp {
     setupEventListeners() {
         // Основные кнопки управления
         window.startSimulation = () => {
-            console.log('🚀 Starting simulation...');
+            console.log('🚀 Запуск симуляции...');
             this.setButtonLoading('start-sim', true);
             this.socket.emit('start_simulation', {}, (response) => {
-                console.log('Start simulation response:', response);
+                console.log('Ответ запуска симуляции:', response);
                 this.setButtonLoading('start-sim', false);
+                if (response && response.status === 'started') {
+                    this.addLog('Симуляция успешно запущена', 'success');
+                }
             });
         };
 
         window.stopSimulation = () => {
-            console.log('🛑 Stopping simulation...');
+            console.log('🛑 Остановка симуляции...');
             this.setButtonLoading('stop-sim', true);
             this.socket.emit('stop_simulation', {}, (response) => {
-                console.log('Stop simulation response:', response);
+                console.log('Ответ остановки симуляции:', response);
                 this.setButtonLoading('stop-sim', false);
+                if (response && response.status === 'stopped') {
+                    this.addLog('Симуляция остановлена', 'info');
+                }
             });
         };
 
         window.addRobot = () => {
-            console.log('🤖 Adding robot...');
+            console.log('🤖 Добавление робота...');
             this.setButtonLoading('add-robot', true);
             this.socket.emit('add_robot', {}, (response) => {
-                console.log('Add robot response:', response);
+                console.log('Ответ добавления робота:', response);
                 this.setButtonLoading('add-robot', false);
+                if (response && response.status === 'added') {
+                    this.addLog(`Робот ${response.device_id} добавлен`, 'success');
+                }
             });
         };
 
         window.addHuman = () => {
-            console.log('👤 Adding human...');
+            console.log('👤 Добавление оператора...');
             this.setButtonLoading('add-human', true);
             this.socket.emit('add_human', {}, (response) => {
-                console.log('Add human response:', response);
+                console.log('Ответ добавления оператора:', response);
                 this.setButtonLoading('add-human', false);
+                if (response && response.status === 'added') {
+                    this.addLog(`Оператор ${response.device_id} добавлен`, 'success');
+                }
             });
         };
 
         window.resetSystem = () => {
-            if (confirm('Are you sure you want to reset the system? All clients will be removed.')) {
+            if (confirm('Вы уверены, что хотите сбросить систему? Все клиенты будут удалены.')) {
                 this.setButtonLoading('reset-btn', true);
                 fetch('/api/control', {
                     method: 'POST',
@@ -159,11 +191,15 @@ class EnhancedPositioningApp {
                     body: JSON.stringify({ command: 'reset' })
                 }).then(response => response.json())
                   .then(data => {
-                      console.log('Reset response:', data);
+                      console.log('Ответ сброса:', data);
                       this.setButtonLoading('reset-btn', false);
+                      if (data.status === 'system_reset') {
+                          this.addLog('Сброс системы завершен', 'success');
+                      }
                   })
                   .catch(error => {
-                      this.addLog('Reset failed: ' + error, 'error');
+                      console.error('Ошибка сброса:', error);
+                      this.addLog('Ошибка сброса: ' + error, 'error');
                       this.setButtonLoading('reset-btn', false);
                   });
             }
@@ -171,49 +207,49 @@ class EnhancedPositioningApp {
 
         // Быстрые действия
         window.addMultipleRobots = (count) => {
-            this.addLog(`Adding ${count} robots...`, 'info');
+            this.addLog(`Добавление ${count} роботов...`, 'info');
             for (let i = 0; i < count; i++) {
                 setTimeout(() => {
                     this.socket.emit('add_robot', {});
-                }, i * 300);
+                }, i * 500);
             }
         };
 
         window.addMultipleHumans = (count) => {
-            this.addLog(`Adding ${count} humans...`, 'info');
+            this.addLog(`Добавление ${count} операторов...`, 'info');
             for (let i = 0; i < count; i++) {
                 setTimeout(() => {
                     this.socket.emit('add_human', {});
-                }, i * 300);
+                }, i * 500);
             }
         };
 
         window.removeAllClients = () => {
             const clientCount = this.clients.size;
             if (clientCount === 0) {
-                this.addLog('No clients to remove', 'warning');
+                this.addLog('Нет клиентов для удаления', 'warning');
                 return;
             }
 
-            if (confirm(`Remove all ${clientCount} clients from the system?`)) {
+            if (confirm(`Удалить всех ${clientCount} клиентов из системы?`)) {
                 this.clients.forEach((client, deviceId) => {
                     this.socket.emit('remove_client', { device_id: deviceId });
                 });
-                this.addLog(`Removal initiated for ${clientCount} clients`, 'info');
+                this.addLog(`Инициировано удаление ${clientCount} клиентов`, 'info');
             }
         };
 
         window.clearLog = () => {
             const logContainer = document.getElementById('system-log');
-            const startTimeElement = document.getElementById('start-time');
-            const startTime = startTimeElement.textContent;
-
-            logContainer.innerHTML = `
-                <div class="log-entry">
-                    <span class="log-time">${startTime}</span>
-                    <span class="log-message log-type-info">Log cleared</span>
-                </div>
-            `;
+            if (logContainer) {
+                // Сохраняем только первую запись (время запуска)
+                const firstEntry = logContainer.querySelector('.log-entry:first-child');
+                logContainer.innerHTML = '';
+                if (firstEntry) {
+                    logContainer.appendChild(firstEntry);
+                }
+                this.addLog('Лог очищен', 'info');
+            }
         };
     }
 
@@ -221,21 +257,22 @@ class EnhancedPositioningApp {
         const button = document.getElementById(buttonId);
         if (!button) return;
 
+        const originalTexts = {
+            'start-sim': '▶ Запустить симуляцию',
+            'stop-sim': '⏹ Остановить симуляцию',
+            'add-robot': '🤖 Добавить робота',
+            'add-human': '👤 Добавить оператора',
+            'reset-btn': '🔄 Сбросить систему'
+        };
+
         if (isLoading) {
             button.disabled = true;
             button.style.opacity = '0.6';
-            button.innerHTML = '⏳ Loading...';
+            button.innerHTML = '⏳ Загрузка...';
         } else {
             button.disabled = false;
             button.style.opacity = '1';
-            // Восстанавливаем оригинальный текст кнопки
-            const originalText = {
-                'start-sim': '▶ Start Simulation',
-                'stop-sim': '⏹ Stop Simulation',
-                'add-robot': '🤖 Add Robot',
-                'add-human': '👤 Add Human',
-                'reset-btn': '🔄 Reset System'
-            }[buttonId];
+            const originalText = originalTexts[buttonId];
             if (originalText) {
                 button.innerHTML = originalText;
             }
@@ -245,11 +282,8 @@ class EnhancedPositioningApp {
     renderMap() {
         const map = document.getElementById('map');
 
-        // Сохраняем легенду если она существует
-        const existingLegend = document.querySelector('.map-legend');
-
-        // Очищаем только клиентов и якоря, но не легенду
-        const elementsToRemove = map.querySelectorAll('.anchor-point, .client-point, .client-label, .confidence-bar');
+        // Очищаем только клиентов, но не якоря и легенду
+        const elementsToRemove = map.querySelectorAll('.client-point, .client-label, .confidence-bar');
         elementsToRemove.forEach(element => element.remove());
 
         // Re-render all clients on map
@@ -257,14 +291,23 @@ class EnhancedPositioningApp {
             this.updateClientOnMap(data);
         });
 
-        // Если легенда была удалена, восстанавливаем её
-        if (!existingLegend && !document.querySelector('.map-legend')) {
+        // Если якоря еще не отрисованы, запрашиваем их
+        if (!this.anchorsRendered) {
+            this.socket.emit('request_anchors');
+        }
+
+        // Добавляем легенду если её нет
+        if (!document.querySelector('.map-legend')) {
             this.addMapLegend();
         }
     }
 
     renderAnchors(anchors) {
         const map = document.getElementById('map');
+
+        // Очищаем только старые якоря
+        const oldAnchors = map.querySelectorAll('.anchor-point');
+        oldAnchors.forEach(anchor => anchor.remove());
 
         Object.entries(anchors).forEach(([id, anchor]) => {
             const point = document.createElement('div');
@@ -280,7 +323,8 @@ class EnhancedPositioningApp {
             map.appendChild(point);
         });
 
-        this.addLog(`Anchors placed: ${Object.keys(anchors).length}`, 'info');
+        this.anchorsRendered = true;
+        this.addLog(`Якоря размещены: ${Object.keys(anchors).length}`, 'info');
     }
 
     updateClientOnMap(data) {
@@ -343,7 +387,7 @@ class EnhancedPositioningApp {
         const container = document.getElementById('clients-list');
         container.innerHTML = '';
 
-        console.log('🔄 Rendering clients list:', this.clients.size, 'clients');
+        console.log('🔄 Отрисовка списка клиентов:', this.clients.size, 'клиентов');
 
         this.clients.forEach((client, deviceId) => {
             const position = this.positions.get(deviceId);
@@ -353,15 +397,17 @@ class EnhancedPositioningApp {
 
             const positionText = position ?
                 `(${position.position.x.toFixed(1)}, ${position.position.y.toFixed(1)})` :
-                'No position data';
+                'Нет данных о позиции';
+
+            const typeText = client.type === 'robot' ? 'Робот' : 'Оператор';
 
             clientElement.innerHTML = `
                 <div class="client-info">
                     <div class="client-name">${deviceId}</div>
-                    <div class="client-type">${client.type.toUpperCase()}</div>
+                    <div class="client-type">${typeText}</div>
                 </div>
                 <div class="client-position">${positionText}</div>
-                <button class="remove-btn" onclick="app.removeClient('${deviceId}')" title="Remove client">
+                <button class="remove-btn" onclick="app.removeClient('${deviceId}')" title="Удалить клиента">
                     ×
                 </button>
             `;
@@ -372,6 +418,7 @@ class EnhancedPositioningApp {
     }
 
     removeClient(deviceId) {
+        console.log('Удаление клиента:', deviceId);
         this.socket.emit('remove_client', { device_id: deviceId });
     }
 
@@ -393,7 +440,7 @@ class EnhancedPositioningApp {
         }
 
         this.updateClientsCount();
-        this.addLog(`Client ${deviceId} removed`, 'info');
+        this.addLog(`Клиент ${deviceId} удален`, 'info');
     }
 
     updateSystemStatus(status) {
@@ -410,6 +457,18 @@ class EnhancedPositioningApp {
         }
         if (status.total_updates !== undefined) {
             document.getElementById('total-updates').textContent = status.total_updates;
+        }
+        if (status.is_running !== undefined) {
+            // Обновляем статус симуляции
+            const startBtn = document.getElementById('start-sim');
+            const stopBtn = document.getElementById('stop-sim');
+            if (status.is_running) {
+                startBtn.disabled = true;
+                stopBtn.disabled = false;
+            } else {
+                startBtn.disabled = false;
+                stopBtn.disabled = true;
+            }
         }
     }
 
@@ -429,7 +488,7 @@ class EnhancedPositioningApp {
         const countElement = document.getElementById('clients-count');
         if (countElement) {
             countElement.textContent = this.clients.size;
-            console.log('👥 Clients count updated:', this.clients.size);
+            console.log('👥 Количество клиентов обновлено:', this.clients.size);
         }
     }
 
@@ -469,23 +528,23 @@ class EnhancedPositioningApp {
                 padding: 10px;
                 border-radius: 5px;
                 font-size: 12px;
-                z-index: 1000; /* Увеличиваем z-index */
+                z-index: 1000;
                 border: 1px solid #ddd;
                 box-shadow: 0 2px 10px rgba(0,0,0,0.1);
             `;
             legend.innerHTML = `
-                <div style="font-weight: bold; margin-bottom: 5px; color: #2c3e50;">Legend</div>
+                <div style="font-weight: bold; margin-bottom: 5px; color: #2c3e50;">Легенда</div>
                 <div style="display: flex; align-items: center; margin: 3px 0;">
                     <div style="width: 12px; height: 12px; background: #e74c3c; border: 2px solid #c0392b; border-radius: 50%; margin-right: 8px;"></div>
-                    <span style="color: #2c3e50;">Anchor</span>
+                    <span style="color: #2c3e50;">Якорь</span>
                 </div>
                 <div style="display: flex; align-items: center; margin: 3px 0;">
                     <div style="width: 12px; height: 12px; background: #e74c3c; border: 2px solid #c0392b; border-radius: 50%; margin-right: 8px;"></div>
-                    <span style="color: #2c3e50;">Robot</span>
+                    <span style="color: #2c3e50;">Робот</span>
                 </div>
                 <div style="display: flex; align-items: center; margin: 3px 0;">
                     <div style="width: 12px; height: 12px; background: #3498db; border: 2px solid #2980b9; border-radius: 50%; margin-right: 8px;"></div>
-                    <span style="color: #2c3e50;">Human</span>
+                    <span style="color: #2c3e50;">Оператор</span>
                 </div>
             `;
             map.appendChild(legend);
