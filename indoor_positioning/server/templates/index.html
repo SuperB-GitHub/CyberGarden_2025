@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Улучшенная система позиционирования в помещении</title>
+    <title>Система позиционирования в помещении</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
 </head>
@@ -11,27 +11,27 @@
     <div class="container">
         <!-- Header -->
         <header class="header">
-            <h1>🏠 Улучшенная система позиционирования в помещении</h1>
+            <h1>📡 Система позиционирования в помещении</h1>
             <div class="status-bar">
                 <div class="status-item">
                     <span class="status-label">Статус системы:</span>
-                    <span id="system-status" class="status-value status-online">ОНЛАЙН</span>
+                    <span id="system-status" class="status-value status-online">АКТИВНА</span>
                 </div>
                 <div class="status-item">
-                    <span class="status-label">Активные клиенты:</span>
-                    <span id="clients-count" class="status-value">0</span>
+                    <span class="status-label">Активные якоря:</span>
+                    <span id="anchors-count" class="status-value">0</span>
                 </div>
                 <div class="status-item">
-                    <span class="status-label">Активные подключения:</span>
+                    <span class="status-label">Обнаружено устройств:</span>
+                    <span id="devices-count" class="status-value">0</span>
+                </div>
+                <div class="status-item">
+                    <span class="status-label">WebSocket подключения:</span>
                     <span id="connections-count" class="status-value">0</span>
                 </div>
                 <div class="status-item">
                     <span class="status-label">Обновления позиций:</span>
                     <span id="updates-count" class="status-value">0</span>
-                </div>
-                <div class="status-item">
-                    <span class="status-label">Счетчик циклов:</span>
-                    <span id="cycle-count" class="status-value">0</span>
                 </div>
             </div>
         </header>
@@ -42,67 +42,107 @@
             <div class="map-container">
                 <h2>📍 Карта позиционирования в реальном времени</h2>
 
+                <!-- System Controls -->
                 <div class="controls">
-                    <button class="btn btn-primary" id="start-sim" onclick="startSimulation()">
-                        ▶ Запустить симуляцию
-                    </button>
-                    <button class="btn btn-danger" id="stop-sim" onclick="stopSimulation()">
-                        ⏹ Остановить симуляцию
-                    </button>
-                    <button class="btn btn-success" id="add-robot" onclick="addRobot()">
-                        🤖 Добавить робота
-                    </button>
-                    <button class="btn btn-info" id="add-human" onclick="addHuman()">
-                        👤 Добавить оператора
-                    </button>
-                    <button class="btn btn-warning" id="reset-btn" onclick="resetSystem()">
+                    <button class="btn btn-primary" id="reset-btn" onclick="resetSystem()">
                         🔄 Сбросить систему
                     </button>
+                    <button class="btn btn-info" id="refresh-btn" onclick="refreshData()">
+                        🔁 Обновить данные
+                    </button>
+                    <div class="view-controls">
+                        <label class="toggle-label">
+                            <input type="checkbox" id="show-confidence" checked onchange="toggleConfidenceCircles()">
+                            Показывать точность
+                        </label>
+                        <label class="toggle-label">
+                            <input type="checkbox" id="show-anchors" checked onchange="toggleAnchorsVisibility()">
+                            Показывать якоря
+                        </label>
+                    </div>
                 </div>
 
+                <!-- Statistics Panel -->
+                <div class="statistics-panel">
+                    <div class="stat-item">
+                        <span class="stat-label">Последнее обновление:</span>
+                        <span id="last-update" class="stat-value">-</span>
+                    </div>
+                    <div class="stat-item">
+                        <span class="stat-label">Ошибок расчета:</span>
+                        <span id="errors-count" class="stat-value">0</span>
+                    </div>
+                    <div class="stat-item">
+                        <span class="stat-label">Всего обновлений:</span>
+                        <span id="total-updates" class="stat-value">0</span>
+                    </div>
+                </div>
+
+                <!-- Map Canvas -->
                 <div class="map" id="map">
                     <!-- Map elements will be added dynamically -->
+                    <div class="room-outline"></div>
+                    <div class="grid-lines"></div>
+                    <div id="anchors-container" class="anchors-container"></div>
+                    <div id="devices-container" class="devices-container"></div>
+                    <div id="confidence-circles" class="confidence-circles"></div>
+                </div>
+
+                <!-- Legend -->
+                <div class="legend">
+                    <div class="legend-item">
+                        <div class="legend-color anchor-color"></div>
+                        <span>Якоря (Anchor)</span>
+                    </div>
+                    <div class="legend-item">
+                        <div class="legend-color device-color"></div>
+                        <span>Мобильные устройства</span>
+                    </div>
+                    <div class="legend-item">
+                        <div class="legend-circle confidence-circle"></div>
+                        <span>Область точности</span>
+                    </div>
                 </div>
             </div>
 
             <!-- Right Panel - Information -->
             <div class="info-panel">
-                <!-- Connected Clients -->
+                <!-- Anchors Status -->
                 <div class="info-section">
-                    <h3>👥 Подключенные клиенты</h3>
-                    <div id="clients-list" class="clients-list">
-                        <!-- Clients will be populated dynamically -->
+                    <h3>📡 Статус якорей</h3>
+                    <div id="anchors-list" class="anchors-list">
+                        <div class="no-data">Нет активных якорей</div>
                     </div>
                 </div>
 
-                <!-- Quick Actions -->
+                <!-- Detected Devices -->
                 <div class="info-section">
-                    <h3>⚡ Быстрые действия</h3>
-                    <div class="quick-actions">
-                        <button class="btn btn-small btn-success" onclick="addMultipleRobots(3)">
-                            +3 Робота
-                        </button>
-                        <button class="btn btn-small btn-info" onclick="addMultipleHumans(2)">
-                            +2 Оператора
-                        </button>
-                        <button class="btn btn-small btn-warning" onclick="removeAllClients()">
-                            Удалить всех
-                        </button>
+                    <h3>📱 Обнаруженные устройства</h3>
+                    <div id="devices-list" class="devices-list">
+                        <div class="no-data">Устройства не обнаружены</div>
+                    </div>
+                </div>
+
+                <!-- Position Details -->
+                <div class="info-section">
+                    <h3>🎯 Детали позиционирования</h3>
+                    <div id="position-details" class="position-details">
+                        <div class="no-data">Выберите устройство на карте</div>
                     </div>
                 </div>
 
                 <!-- System Log -->
                 <div class="info-section">
-                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
+                    <div class="log-header">
                         <h3>📋 Системный лог</h3>
-                        <button class="btn btn-small btn-secondary" onclick="clearLog()" style="padding: 5px 10px; font-size: 0.8em;">
+                        <button class="btn btn-small btn-secondary" onclick="clearLog()">
                             Очистить
                         </button>
                     </div>
                     <div id="system-log" class="system-log">
                         <div class="log-entry">
                             <span class="log-time" id="start-time"></span>
-                            <span class="log-message log-type-info">Система инициализирована и готова к работе</span>
+                            <span class="log-message log-type-info">Система инициализирована. Ожидание данных от якорей...</span>
                         </div>
                     </div>
                 </div>

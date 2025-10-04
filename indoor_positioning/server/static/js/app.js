@@ -1,13 +1,14 @@
-class EnhancedPositioningApp {
+class IndoorPositioningApp {
     constructor() {
         this.socket = io();
         this.roomConfig = {
             width: 20,
             height: 15
         };
-        this.clients = new Map();
+        this.anchors = new Map();
+        this.devices = new Map();
         this.positions = new Map();
-        this.anchorsRendered = false; // Флаг для отслеживания отрисованных якорей
+        this.selectedDevice = null;
 
         this.init();
     }
@@ -17,14 +18,14 @@ class EnhancedPositioningApp {
         this.setupEventListeners();
         this.renderMap();
         this.updateStartTime();
-        this.addMapLegend();
+        this.requestInitialData();
     }
 
     setupSocketListeners() {
         // Connection events
         this.socket.on('connect', () => {
             this.addLog('Подключено к серверу позиционирования', 'success');
-            this.updateSystemStatus('ОНЛАЙН');
+            this.updateSystemStatus('АКТИВНА');
         });
 
         this.socket.on('disconnect', () => {
@@ -32,33 +33,21 @@ class EnhancedPositioningApp {
             this.updateSystemStatus('ОФФЛАЙН');
         });
 
-        // Error handlers
         this.socket.on('connect_error', (error) => {
             console.error('Ошибка подключения:', error);
             this.addLog('Ошибка подключения: ' + error.message, 'error');
             this.updateSystemStatus('ОФФЛАЙН');
         });
 
-        this.socket.on('reconnect_attempt', () => {
-            console.log('Попытка переподключения...');
-            this.addLog('Переподключение к серверу...', 'warning');
-        });
-
-        this.socket.on('reconnect', () => {
-            console.log('Успешно переподключено');
-            this.addLog('Переподключено к серверу', 'success');
-            this.updateSystemStatus('ОНЛАЙН');
-        });
-
         // Data events
         this.socket.on('anchors_data', (anchors) => {
-            console.log('📌 Данные якорей получены:', anchors);
-            this.renderAnchors(anchors);
+            console.log('📡 Данные якорей получены:', anchors);
+            this.updateAnchorsData(anchors);
         });
 
-        this.socket.on('clients_data', (clients) => {
-            console.log('📋 Данные клиентов получены:', clients);
-            this.updateClientsData(clients);
+        this.socket.on('devices_data', (devices) => {
+            console.log('📱 Данные устройств получены:', devices);
+            this.updateDevicesData(devices);
         });
 
         this.socket.on('positions_data', (positions) => {
@@ -71,9 +60,9 @@ class EnhancedPositioningApp {
             this.handlePositionUpdate(data);
         });
 
-        this.socket.on('client_removed', (data) => {
-            console.log('🗑️ Клиент удален:', data);
-            this.removeClientFromUI(data.device_id);
+        this.socket.on('anchor_update', (data) => {
+            console.log('📡 Обновление якоря:', data);
+            this.handleAnchorUpdate(data);
         });
 
         // System events
@@ -90,166 +79,98 @@ class EnhancedPositioningApp {
         });
 
         this.socket.on('system_reset', () => {
-            this.clients.clear();
+            this.anchors.clear();
+            this.devices.clear();
             this.positions.clear();
-            this.renderClientsList();
+            this.selectedDevice = null;
+            this.renderAnchorsList();
+            this.renderDevicesList();
             this.renderMap();
+            this.clearPositionDetails();
             this.addLog('Система была сброшена', 'info');
         });
     }
 
-    updateClientsData(clients) {
-        this.clients = new Map(Object.entries(clients));
-        console.log('📊 Клиенты обновлены:', this.clients.size);
-        this.renderClientsList();
-        this.updateClientsCount();
+    updateAnchorsData(anchors) {
+        this.anchors = new Map(Object.entries(anchors));
+        console.log('📊 Якоря обновлены:', this.anchors.size);
+        this.renderAnchorsList();
+        this.renderAnchorsOnMap();
+        this.updateAnchorsCount();
+    }
+
+    updateDevicesData(devices) {
+        this.devices = new Map(Object.entries(devices));
+        console.log('📊 Устройства обновлены:', this.devices.size);
+        this.renderDevicesList();
+        this.updateDevicesCount();
     }
 
     updatePositionsData(positions) {
         this.positions = new Map(Object.entries(positions));
         console.log('📊 Позиции обновлены:', this.positions.size);
-        this.renderMap();
-        this.renderClientsList();
+        this.renderDevicesOnMap();
+        this.renderDevicesList();
     }
 
     handlePositionUpdate(data) {
         // Update position in positions map
         this.positions.set(data.device_id, data);
 
-        // Update or create client on map
-        this.updateClientOnMap(data);
+        // Update device on map
+        this.updateDeviceOnMap(data);
 
-        // Update client in list
-        this.updateClientInList(data.device_id, data.position);
+        // Update device in list
+        this.updateDeviceInList(data.device_id, data.position, data.confidence);
 
-        // Ensure client exists in clients list
-        if (!this.clients.has(data.device_id)) {
-            this.clients.set(data.device_id, {
-                type: data.client_type,
-                status: 'active'
-            });
-            this.renderClientsList();
+        // Update position details if device is selected
+        if (this.selectedDevice === data.device_id) {
+            this.showPositionDetails(data.device_id);
         }
     }
 
+    handleAnchorUpdate(data) {
+        this.addLog(`Якорь ${data.anchor_id} обновил данные`, 'info');
+    }
+
     setupEventListeners() {
-        // Основные кнопки управления
-        window.startSimulation = () => {
-            console.log('🚀 Запуск симуляции...');
-            this.setButtonLoading('start-sim', true);
-            this.socket.emit('start_simulation', {}, (response) => {
-                console.log('Ответ запуска симуляции:', response);
-                this.setButtonLoading('start-sim', false);
-                if (response && response.status === 'started') {
-                    this.addLog('Симуляция успешно запущена', 'success');
-                }
-            });
-        };
-
-        window.stopSimulation = () => {
-            console.log('🛑 Остановка симуляции...');
-            this.setButtonLoading('stop-sim', true);
-            this.socket.emit('stop_simulation', {}, (response) => {
-                console.log('Ответ остановки симуляции:', response);
-                this.setButtonLoading('stop-sim', false);
-                if (response && response.status === 'stopped') {
-                    this.addLog('Симуляция остановлена', 'info');
-                }
-            });
-        };
-
-        window.addRobot = () => {
-            console.log('🤖 Добавление робота...');
-            this.setButtonLoading('add-robot', true);
-            this.socket.emit('add_robot', {}, (response) => {
-                console.log('Ответ добавления робота:', response);
-                this.setButtonLoading('add-robot', false);
-                if (response && response.status === 'added') {
-                    this.addLog(`Робот ${response.device_id} добавлен`, 'success');
-                }
-            });
-        };
-
-        window.addHuman = () => {
-            console.log('👤 Добавление оператора...');
-            this.setButtonLoading('add-human', true);
-            this.socket.emit('add_human', {}, (response) => {
-                console.log('Ответ добавления оператора:', response);
-                this.setButtonLoading('add-human', false);
-                if (response && response.status === 'added') {
-                    this.addLog(`Оператор ${response.device_id} добавлен`, 'success');
-                }
-            });
-        };
-
+        // System controls
         window.resetSystem = () => {
-            if (confirm('Вы уверены, что хотите сбросить систему? Все клиенты будут удалены.')) {
+            if (confirm('Вы уверены, что хотите сбросить систему? Все данные будут удалены.')) {
                 this.setButtonLoading('reset-btn', true);
-                fetch('/api/control', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ command: 'reset' })
-                }).then(response => response.json())
-                  .then(data => {
-                      console.log('Ответ сброса:', data);
-                      this.setButtonLoading('reset-btn', false);
-                      if (data.status === 'system_reset') {
-                          this.addLog('Сброс системы завершен', 'success');
-                      }
-                  })
-                  .catch(error => {
-                      console.error('Ошибка сброса:', error);
-                      this.addLog('Ошибка сброса: ' + error, 'error');
-                      this.setButtonLoading('reset-btn', false);
-                  });
-            }
-        };
-
-        // Быстрые действия
-        window.addMultipleRobots = (count) => {
-            this.addLog(`Добавление ${count} роботов...`, 'info');
-            for (let i = 0; i < count; i++) {
-                setTimeout(() => {
-                    this.socket.emit('add_robot', {});
-                }, i * 500);
-            }
-        };
-
-        window.addMultipleHumans = (count) => {
-            this.addLog(`Добавление ${count} операторов...`, 'info');
-            for (let i = 0; i < count; i++) {
-                setTimeout(() => {
-                    this.socket.emit('add_human', {});
-                }, i * 500);
-            }
-        };
-
-        window.removeAllClients = () => {
-            const clientCount = this.clients.size;
-            if (clientCount === 0) {
-                this.addLog('Нет клиентов для удаления', 'warning');
-                return;
-            }
-
-            if (confirm(`Удалить всех ${clientCount} клиентов из системы?`)) {
-                this.clients.forEach((client, deviceId) => {
-                    this.socket.emit('remove_client', { device_id: deviceId });
+                this.socket.emit('reset_system', {}, (response) => {
+                    this.setButtonLoading('reset-btn', false);
+                    if (response && response.status === 'success') {
+                        this.addLog('Система сброшена', 'success');
+                    }
                 });
-                this.addLog(`Инициировано удаление ${clientCount} клиентов`, 'info');
             }
         };
 
-        window.clearLog = () => {
-            const logContainer = document.getElementById('system-log');
-            if (logContainer) {
-                // Сохраняем только первую запись (время запуска)
-                const firstEntry = logContainer.querySelector('.log-entry:first-child');
-                logContainer.innerHTML = '';
-                if (firstEntry) {
-                    logContainer.appendChild(firstEntry);
-                }
-                this.addLog('Лог очищен', 'info');
-            }
+        window.refreshData = () => {
+            this.setButtonLoading('refresh-btn', true);
+            this.requestInitialData();
+            setTimeout(() => {
+                this.setButtonLoading('refresh-btn', false);
+                this.addLog('Данные обновлены', 'info');
+            }, 1000);
+        };
+
+        // View controls
+        window.toggleConfidenceCircles = () => {
+            const show = document.getElementById('show-confidence').checked;
+            const circles = document.querySelectorAll('.confidence-circle');
+            circles.forEach(circle => {
+                circle.style.display = show ? 'block' : 'none';
+            });
+        };
+
+        window.toggleAnchorsVisibility = () => {
+            const show = document.getElementById('show-anchors').checked;
+            const anchors = document.querySelectorAll('.anchor-point');
+            anchors.forEach(anchor => {
+                anchor.style.display = show ? 'block' : 'none';
+            });
         };
     }
 
@@ -258,20 +179,16 @@ class EnhancedPositioningApp {
         if (!button) return;
 
         const originalTexts = {
-            'start-sim': '▶ Запустить симуляцию',
-            'stop-sim': '⏹ Остановить симуляцию',
-            'add-robot': '🤖 Добавить робота',
-            'add-human': '👤 Добавить оператора',
-            'reset-btn': '🔄 Сбросить систему'
+            'reset-btn': '🔄 Сбросить систему',
+            'refresh-btn': '🔁 Обновить данные'
         };
 
         if (isLoading) {
             button.disabled = true;
-            button.style.opacity = '0.6';
-            button.innerHTML = '⏳ Загрузка...';
+            button.classList.add('btn-loading');
         } else {
             button.disabled = false;
-            button.style.opacity = '1';
+            button.classList.remove('btn-loading');
             const originalText = originalTexts[buttonId];
             if (originalText) {
                 button.innerHTML = originalText;
@@ -282,165 +199,304 @@ class EnhancedPositioningApp {
     renderMap() {
         const map = document.getElementById('map');
 
-        // Очищаем только клиентов, но не якоря и легенду
-        const elementsToRemove = map.querySelectorAll('.client-point, .client-label, .confidence-bar');
-        elementsToRemove.forEach(element => element.remove());
+        // Clear only device elements
+        const deviceElements = map.querySelectorAll('.device-point, .device-label, .confidence-circle');
+        deviceElements.forEach(element => element.remove());
 
-        // Re-render all clients on map
+        // Re-render all devices on map
         this.positions.forEach((data, deviceId) => {
-            this.updateClientOnMap(data);
+            this.updateDeviceOnMap(data);
         });
 
-        // Если якоря еще не отрисованы, запрашиваем их
-        if (!this.anchorsRendered) {
-            this.socket.emit('request_anchors');
-        }
-
-        // Добавляем легенду если её нет
-        if (!document.querySelector('.map-legend')) {
-            this.addMapLegend();
+        // Render anchors if we have them
+        if (this.anchors.size > 0) {
+            this.renderAnchorsOnMap();
         }
     }
 
-    renderAnchors(anchors) {
-        const map = document.getElementById('map');
+    renderAnchorsOnMap() {
+        const container = document.getElementById('anchors-container');
+        if (!container) return;
 
-        // Очищаем только старые якоря
-        const oldAnchors = map.querySelectorAll('.anchor-point');
-        oldAnchors.forEach(anchor => anchor.remove());
+        container.innerHTML = '';
 
-        Object.entries(anchors).forEach(([id, anchor]) => {
+        this.anchors.forEach((anchor, anchorId) => {
             const point = document.createElement('div');
-            point.className = 'anchor-point';
-            point.title = `${id}\n(${anchor.coordinates.x}, ${anchor.coordinates.y}, ${anchor.coordinates.z})`;
+            point.className = 'anchor-point active';
+            point.setAttribute('data-anchor-id', anchorId);
 
-            const x = (anchor.coordinates.x / this.roomConfig.width) * 100;
-            const y = (anchor.coordinates.y / this.roomConfig.height) * 100;
+            const x = (anchor.x / this.roomConfig.width) * 100;
+            const y = (anchor.y / this.roomConfig.height) * 100;
 
             point.style.left = `${x}%`;
             point.style.top = `${y}%`;
+            point.title = `${anchorId}\nКоординаты: (${anchor.x}, ${anchor.y}, ${anchor.z})`;
 
-            map.appendChild(point);
+            point.addEventListener('click', () => {
+                this.showAnchorDetails(anchorId);
+            });
+
+            container.appendChild(point);
         });
-
-        this.anchorsRendered = true;
-        this.addLog(`Якоря размещены: ${Object.keys(anchors).length}`, 'info');
     }
 
-    updateClientOnMap(data) {
-        let point = document.getElementById(`client-${data.device_id}`);
+    renderDevicesOnMap() {
+        const container = document.getElementById('devices-container');
+        const confidenceContainer = document.getElementById('confidence-circles');
+        if (!container || !confidenceContainer) return;
 
+        // Clear containers
+        container.innerHTML = '';
+        confidenceContainer.innerHTML = '';
+
+        this.positions.forEach((data, deviceId) => {
+            this.updateDeviceOnMap(data);
+        });
+    }
+
+    updateDeviceOnMap(data) {
+        const container = document.getElementById('devices-container');
+        const confidenceContainer = document.getElementById('confidence-circles');
+        if (!container || !confidenceContainer) return;
+
+        let point = document.getElementById(`device-${data.device_id}`);
+        let confidenceCircle = document.getElementById(`confidence-${data.device_id}`);
+
+        // Create or update device point
         if (!point) {
             point = document.createElement('div');
-            point.id = `client-${data.device_id}`;
-            point.className = `client-point client-${data.client_type}-point`;
+            point.id = `device-${data.device_id}`;
+            point.className = 'device-point';
+            point.setAttribute('data-device-id', data.device_id);
+
+            const deviceInfo = this.devices.get(data.device_id);
+            const color = deviceInfo ? deviceInfo.color : '#3498db';
+            point.style.background = color;
+            point.style.border = `3px solid ${this.darkenColor(color, 20)}`;
 
             // Add label
             const label = document.createElement('div');
-            label.className = 'client-label';
-            label.textContent = data.device_id;
+            label.className = 'device-label';
+            label.textContent = this.formatMacAddress(data.device_id);
             point.appendChild(label);
 
-            // Add confidence bar
-            const confidenceBar = document.createElement('div');
-            confidenceBar.className = 'confidence-bar';
-            const confidenceFill = document.createElement('div');
-            confidenceFill.className = 'confidence-fill';
-            confidenceBar.appendChild(confidenceFill);
-            point.appendChild(confidenceBar);
+            point.addEventListener('click', (e) => {
+                e.stopPropagation();
+                this.selectDevice(data.device_id);
+            });
 
-            document.getElementById('map').appendChild(point);
-        } else {
-            // Update class if needed
-            point.className = `client-point client-${data.client_type}-point`;
+            container.appendChild(point);
         }
 
+        // Create or update confidence circle
+        if (!confidenceCircle) {
+            confidenceCircle = document.createElement('div');
+            confidenceCircle.id = `confidence-${data.device_id}`;
+            confidenceCircle.className = 'confidence-circle';
+            confidenceCircle.setAttribute('data-device-id', data.device_id);
+            confidenceContainer.appendChild(confidenceCircle);
+        }
+
+        // Update positions
         const x = (data.position.x / this.roomConfig.width) * 100;
         const y = (data.position.y / this.roomConfig.height) * 100;
 
         point.style.left = `${x}%`;
         point.style.top = `${y}%`;
 
-        // Update confidence
-        const confidenceFill = point.querySelector('.confidence-fill');
-        if (confidenceFill) {
-            confidenceFill.style.width = `${data.confidence * 100}%`;
-            confidenceFill.style.background = data.confidence > 0.9 ? '#27ae60' :
-                                             data.confidence > 0.7 ? '#f39c12' : '#e74c3c';
-        }
+        // Update confidence circle
+        const radius = (1 - data.confidence) * 50 + 20; // Radius based on confidence
+        confidenceCircle.style.left = `${x}%`;
+        confidenceCircle.style.top = `${y}%`;
+        confidenceCircle.style.width = `${radius * 2}px`;
+        confidenceCircle.style.height = `${radius * 2}px`;
+
+        // Set confidence color
+        const confidenceClass = data.confidence > 0.8 ? 'confidence-high' :
+                               data.confidence > 0.6 ? 'confidence-medium' : 'confidence-low';
+        confidenceCircle.className = `confidence-circle ${confidenceClass}`;
+
+        // Update visibility based on settings
+        const showConfidence = document.getElementById('show-confidence').checked;
+        confidenceCircle.style.display = showConfidence ? 'block' : 'none';
     }
 
-    updateClientInList(deviceId, position) {
-        const clientElement = document.querySelector(`[data-device-id="${deviceId}"]`);
-        if (clientElement) {
-            const positionElement = clientElement.querySelector('.client-position');
+    selectDevice(deviceId) {
+        // Deselect previous device
+        if (this.selectedDevice) {
+            const prevPoint = document.getElementById(`device-${this.selectedDevice}`);
+            if (prevPoint) {
+                prevPoint.classList.remove('selected');
+            }
+        }
+
+        // Select new device
+        this.selectedDevice = deviceId;
+        const point = document.getElementById(`device-${deviceId}`);
+        if (point) {
+            point.classList.add('selected');
+        }
+
+        this.showPositionDetails(deviceId);
+    }
+
+    showPositionDetails(deviceId) {
+        const position = this.positions.get(deviceId);
+        const device = this.devices.get(deviceId);
+
+        if (!position || !device) return;
+
+        const container = document.getElementById('position-details');
+        container.innerHTML = `
+            <div class="detail-item">
+                <span class="detail-label">MAC-адрес:</span>
+                <span class="detail-value">${deviceId}</span>
+            </div>
+            <div class="detail-item">
+                <span class="detail-label">Координаты:</span>
+                <span class="detail-value">X: ${position.position.x.toFixed(2)}м, Y: ${position.position.y.toFixed(2)}м</span>
+            </div>
+            <div class="detail-item">
+                <span class="detail-label">Точность:</span>
+                <span class="detail-value">${(position.confidence * 100).toFixed(1)}%</span>
+            </div>
+            <div class="detail-item">
+                <span class="detail-label">Якорей использовано:</span>
+                <span class="detail-value">${position.anchors_used || 'Н/Д'}</span>
+            </div>
+            <div class="detail-item">
+                <span class="detail-label">Последнее обновление:</span>
+                <span class="detail-value">${new Date(position.timestamp).toLocaleTimeString()}</span>
+            </div>
+            <div class="detail-item">
+                <span class="detail-label">Тип устройства:</span>
+                <span class="detail-value">${this.getDeviceTypeText(device.type)}</span>
+            </div>
+        `;
+    }
+
+    showAnchorDetails(anchorId) {
+        const anchor = this.anchors.get(anchorId);
+        if (!anchor) return;
+
+        const container = document.getElementById('position-details');
+        container.innerHTML = `
+            <div class="detail-item">
+                <span class="detail-label">ID якоря:</span>
+                <span class="detail-value">${anchorId}</span>
+            </div>
+            <div class="detail-item">
+                <span class="detail-label">Координаты:</span>
+                <span class="detail-value">X: ${anchor.x}м, Y: ${anchor.y}м, Z: ${anchor.z}м</span>
+            </div>
+            <div class="detail-item">
+                <span class="detail-label">Статус:</span>
+                <span class="detail-value">${this.getAnchorStatusText(anchor.status)}</span>
+            </div>
+            <div class="detail-item">
+                <span class="detail-label">Последнее обновление:</span>
+                <span class="detail-value">${new Date(anchor.last_update).toLocaleTimeString()}</span>
+            </div>
+        `;
+    }
+
+    clearPositionDetails() {
+        const container = document.getElementById('position-details');
+        container.innerHTML = '<div class="no-data">Выберите устройство на карте</div>';
+    }
+
+    updateDeviceInList(deviceId, position, confidence) {
+        const deviceElement = document.querySelector(`[data-device-id="${deviceId}"]`);
+        if (deviceElement) {
+            const positionElement = deviceElement.querySelector('.device-position');
             if (positionElement) {
                 positionElement.textContent = `(${position.x.toFixed(1)}, ${position.y.toFixed(1)})`;
             }
+
+            const confidenceElement = deviceElement.querySelector('.device-confidence');
+            if (confidenceElement) {
+                confidenceElement.textContent = `${(confidence * 100).toFixed(0)}%`;
+            }
         } else {
-            // If client element doesn't exist, re-render the list
-            this.renderClientsList();
+            // If device element doesn't exist, re-render the list
+            this.renderDevicesList();
         }
     }
 
-    renderClientsList() {
-        const container = document.getElementById('clients-list');
+    renderAnchorsList() {
+        const container = document.getElementById('anchors-list');
+        if (!container) return;
+
+        if (this.anchors.size === 0) {
+            container.innerHTML = '<div class="no-data">Нет активных якорей</div>';
+            return;
+        }
+
         container.innerHTML = '';
+        this.anchors.forEach((anchor, anchorId) => {
+            const anchorElement = document.createElement('div');
+            anchorElement.className = 'anchor-item';
+            anchorElement.setAttribute('data-anchor-id', anchorId);
 
-        console.log('🔄 Отрисовка списка клиентов:', this.clients.size, 'клиентов');
+            anchorElement.innerHTML = `
+                <div class="anchor-info">
+                    <div class="anchor-name">${anchorId}</div>
+                    <div class="anchor-status ${anchor.status}">${this.getAnchorStatusText(anchor.status)}</div>
+                </div>
+                <div class="anchor-coordinates">
+                    (${anchor.x}, ${anchor.y})
+                </div>
+            `;
 
-        this.clients.forEach((client, deviceId) => {
+            anchorElement.addEventListener('click', () => {
+                this.showAnchorDetails(anchorId);
+            });
+
+            container.appendChild(anchorElement);
+        });
+    }
+
+    renderDevicesList() {
+        const container = document.getElementById('devices-list');
+        if (!container) return;
+
+        if (this.devices.size === 0) {
+            container.innerHTML = '<div class="no-data">Устройства не обнаружены</div>';
+            return;
+        }
+
+        container.innerHTML = '';
+        this.devices.forEach((device, deviceId) => {
             const position = this.positions.get(deviceId);
-            const clientElement = document.createElement('div');
-            clientElement.className = `client-item client-${client.type}`;
-            clientElement.setAttribute('data-device-id', deviceId);
+            const deviceElement = document.createElement('div');
+            deviceElement.className = 'device-item';
+            deviceElement.setAttribute('data-device-id', deviceId);
 
             const positionText = position ?
                 `(${position.position.x.toFixed(1)}, ${position.position.y.toFixed(1)})` :
-                'Нет данных о позиции';
+                'Нет данных';
 
-            const typeText = client.type === 'robot' ? 'Робот' : 'Оператор';
+            const confidenceText = position ?
+                `${(position.confidence * 100).toFixed(0)}%` :
+                'Н/Д';
 
-            clientElement.innerHTML = `
-                <div class="client-info">
-                    <div class="client-name">${deviceId}</div>
-                    <div class="client-type">${typeText}</div>
+            deviceElement.innerHTML = `
+                <div class="device-info">
+                    <div class="device-mac">${this.formatMacAddress(deviceId)}</div>
+                    <div class="device-type">${this.getDeviceTypeText(device.type)}</div>
                 </div>
-                <div class="client-position">${positionText}</div>
-                <button class="remove-btn" onclick="app.removeClient('${deviceId}')" title="Удалить клиента">
-                    ×
-                </button>
+                <div style="text-align: right;">
+                    <div class="device-position">${positionText}</div>
+                    <div class="device-confidence" style="font-size: 0.8em; color: #7f8c8d;">${confidenceText}</div>
+                </div>
             `;
-            container.appendChild(clientElement);
+
+            deviceElement.addEventListener('click', () => {
+                this.selectDevice(deviceId);
+            });
+
+            container.appendChild(deviceElement);
         });
-
-        this.updateClientsCount();
-    }
-
-    removeClient(deviceId) {
-        console.log('Удаление клиента:', deviceId);
-        this.socket.emit('remove_client', { device_id: deviceId });
-    }
-
-    removeClientFromUI(deviceId) {
-        // Remove from clients map
-        this.clients.delete(deviceId);
-        this.positions.delete(deviceId);
-
-        // Remove from DOM
-        const clientElement = document.querySelector(`[data-device-id="${deviceId}"]`);
-        if (clientElement) {
-            clientElement.remove();
-        }
-
-        // Remove from map
-        const mapElement = document.getElementById(`client-${deviceId}`);
-        if (mapElement) {
-            mapElement.remove();
-        }
-
-        this.updateClientsCount();
-        this.addLog(`Клиент ${deviceId} удален`, 'info');
     }
 
     updateSystemStatus(status) {
@@ -452,23 +508,12 @@ class EnhancedPositioningApp {
     }
 
     updateSystemInfo(status) {
-        if (status.cycle_count !== undefined) {
-            document.getElementById('cycle-count').textContent = status.cycle_count;
-        }
         if (status.total_updates !== undefined) {
             document.getElementById('total-updates').textContent = status.total_updates;
         }
-        if (status.is_running !== undefined) {
-            // Обновляем статус симуляции
-            const startBtn = document.getElementById('start-sim');
-            const stopBtn = document.getElementById('stop-sim');
-            if (status.is_running) {
-                startBtn.disabled = true;
-                stopBtn.disabled = false;
-            } else {
-                startBtn.disabled = false;
-                stopBtn.disabled = true;
-            }
+        if (status.last_calculation) {
+            document.getElementById('last-update').textContent =
+                new Date(status.last_calculation).toLocaleTimeString();
         }
     }
 
@@ -479,16 +524,25 @@ class EnhancedPositioningApp {
         if (stats.position_updates !== undefined) {
             document.getElementById('updates-count').textContent = stats.position_updates;
         }
-        if (stats.errors !== undefined) {
-            document.getElementById('errors-count').textContent = stats.errors;
+        if (stats.devices_detected !== undefined) {
+            document.getElementById('devices-count').textContent = stats.devices_detected;
+        }
+        if (stats.calculation_errors !== undefined) {
+            document.getElementById('errors-count').textContent = stats.calculation_errors;
         }
     }
 
-    updateClientsCount() {
-        const countElement = document.getElementById('clients-count');
+    updateAnchorsCount() {
+        const countElement = document.getElementById('anchors-count');
         if (countElement) {
-            countElement.textContent = this.clients.size;
-            console.log('👥 Количество клиентов обновлено:', this.clients.size);
+            countElement.textContent = this.anchors.size;
+        }
+    }
+
+    updateDevicesCount() {
+        const countElement = document.getElementById('devices-count');
+        if (countElement) {
+            countElement.textContent = this.devices.size;
         }
     }
 
@@ -515,48 +569,100 @@ class EnhancedPositioningApp {
         }
     }
 
-    addMapLegend() {
-        const map = document.getElementById('map');
-        if (map && !document.querySelector('.map-legend')) {
-            const legend = document.createElement('div');
-            legend.className = 'map-legend';
-            legend.style.cssText = `
-                position: absolute;
-                bottom: 10px;
-                right: 10px;
-                background: rgba(255, 255, 255, 0.95);
-                padding: 10px;
-                border-radius: 5px;
-                font-size: 12px;
-                z-index: 1000;
-                border: 1px solid #ddd;
-                box-shadow: 0 2px 10px rgba(0,0,0,0.1);
-            `;
-            legend.innerHTML = `
-                <div style="font-weight: bold; margin-bottom: 5px; color: #2c3e50;">Легенда</div>
-                <div style="display: flex; align-items: center; margin: 3px 0;">
-                    <div style="width: 12px; height: 12px; background: #e74c3c; border: 2px solid #c0392b; border-radius: 50%; margin-right: 8px;"></div>
-                    <span style="color: #2c3e50;">Якорь</span>
-                </div>
-                <div style="display: flex; align-items: center; margin: 3px 0;">
-                    <div style="width: 12px; height: 12px; background: #e74c3c; border: 2px solid #c0392b; border-radius: 50%; margin-right: 8px;"></div>
-                    <span style="color: #2c3e50;">Робот</span>
-                </div>
-                <div style="display: flex; align-items: center; margin: 3px 0;">
-                    <div style="width: 12px; height: 12px; background: #3498db; border: 2px solid #2980b9; border-radius: 50%; margin-right: 8px;"></div>
-                    <span style="color: #2c3e50;">Оператор</span>
-                </div>
-            `;
-            map.appendChild(legend);
+    requestInitialData() {
+        // Request initial data from server
+        fetch('/api/anchors')
+            .then(response => response.json())
+            .then(anchors => this.updateAnchorsData(anchors))
+            .catch(error => console.error('Ошибка загрузки якорей:', error));
 
-            // Добавляем обработчик для предотвращения удаления легенды
-            legend.setAttribute('data-legend', 'true');
-        }
+        fetch('/api/devices')
+            .then(response => response.json())
+            .then(devices => this.updateDevicesData(devices))
+            .catch(error => console.error('Ошибка загрузки устройств:', error));
+
+        fetch('/api/positions')
+            .then(response => response.json())
+            .then(positions => this.updatePositionsData(positions))
+            .catch(error => console.error('Ошибка загрузки позиций:', error));
+
+        fetch('/api/status')
+            .then(response => response.json())
+            .then(status => {
+                this.updateSystemInfo(status.system);
+                this.updateStatistics(status.statistics);
+            })
+            .catch(error => console.error('Ошибка загрузки статуса:', error));
+    }
+
+    // Utility functions
+    formatMacAddress(mac) {
+        if (mac.length <= 12) return mac;
+        return mac.match(/.{1,2}/g).join(':').toUpperCase();
+    }
+
+    getDeviceTypeText(type) {
+        const types = {
+            'mobile_device': 'Мобильное устройство',
+            'robot': 'Робот',
+            'human': 'Оператор',
+            'unknown': 'Неизвестно'
+        };
+        return types[type] || type;
+    }
+
+    getAnchorStatusText(status) {
+        const statuses = {
+            'active': 'Активен',
+            'inactive': 'Неактивен',
+            'error': 'Ошибка'
+        };
+        return statuses[status] || status;
+    }
+
+    darkenColor(color, percent) {
+        const num = parseInt(color.replace("#", ""), 16);
+        const amt = Math.round(2.55 * percent);
+        const R = (num >> 16) - amt;
+        const G = (num >> 8 & 0x00FF) - amt;
+        const B = (num & 0x0000FF) - amt;
+        return "#" + (0x1000000 + (R < 255 ? R < 1 ? 0 : R : 255) * 0x10000 +
+            (G < 255 ? G < 1 ? 0 : G : 255) * 0x100 +
+            (B < 255 ? B < 1 ? 0 : B : 255)).toString(16).slice(1);
     }
 }
+
+// Click outside to deselect
+document.addEventListener('click', (e) => {
+    if (!e.target.closest('.device-point') && !e.target.closest('.anchor-point')) {
+        if (app && app.selectedDevice) {
+            const point = document.getElementById(`device-${app.selectedDevice}`);
+            if (point) {
+                point.classList.remove('selected');
+            }
+            app.selectedDevice = null;
+            app.clearPositionDetails();
+        }
+    }
+});
 
 // Initialize application
 let app;
 document.addEventListener('DOMContentLoaded', () => {
-    app = new EnhancedPositioningApp();
+    app = new IndoorPositioningApp();
 });
+
+// Global function for log clearing
+window.clearLog = () => {
+    const logContainer = document.getElementById('system-log');
+    if (logContainer) {
+        const firstEntry = logContainer.querySelector('.log-entry:first-child');
+        logContainer.innerHTML = '';
+        if (firstEntry) {
+            logContainer.appendChild(firstEntry);
+        }
+        if (app) {
+            app.addLog('Лог очищен', 'info');
+        }
+    }
+};
