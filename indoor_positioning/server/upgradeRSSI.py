@@ -1,11 +1,10 @@
 import numpy as np
 from scipy.optimize import curve_fit
-from scipy import signal
 
 class RSSIProcessor:
     """
     Класс для обработки и улучшения сигнала RSSI в indoor-позиционировании.
-    Включает калибровку, предобработку, сглаживание Kalman и расчет расстояния.
+    Включает калибровку, мягкую фильтрацию (взвешенное среднее) и фильтр Калмана.
     """
     def __init__(self, measured_power=-60, path_loss_exponent=3.0, process_variance=0.1, measurement_variance=4.0):
         """
@@ -17,15 +16,16 @@ class RSSIProcessor:
         """
         self.measured_power = measured_power
         self.n = path_loss_exponent
-        self.kf_x = measured_power  
-        self.kf_P = 1.0 
+        # Kalman state
+        self.kf_x = measured_power  # Начальная оценка RSSI
+        self.kf_P = 1.0  # Начальная коварианция ошибки
         self.Q = process_variance
         self.R = measurement_variance
 
     def rssi_to_distance(self, rssi):
         """Преобразование RSSI в расстояние по log-distance модели."""
         if rssi >= self.measured_power:
-            return 1.0 
+            return 1.0  # Минимальное расстояние
         return 10 ** ((self.measured_power - rssi) / (10 * self.n))
 
     def calibrate_parameters(self, distances, rssi_values):
@@ -40,26 +40,44 @@ class RSSIProcessor:
         try:
             popt, _ = curve_fit(path_loss_model, np.array(distances), np.array(rssi_values))
             self.measured_power, self.n = popt
+            print(f"Калиброванные параметры: P0={popt[0]:.2f}, n={popt[1]:.2f}")
             return popt
         except Exception as e:
-            print(f"Calibration error: {e}")
+            print(f"Ошибка калибровки: {e}")
             return None
 
-    def preprocess_rssi(self, rssi_sequence, kernel_size=3, low_threshold=-90, high_threshold=-30):
+    def smooth_rssi(self, rssi_sequence, window_size=3, weights=None):
         """
-        Предобработка: отсев outliers, замена NaN, медианный фильтр.
+        Мягкая фильтрация RSSI с помощью взвешенного скользящего среднего.
         rssi_sequence: список/массив RSSI
-        kernel_size: размер ядра для medfilt
-        thresholds: пороги для отсева
+        window_size: размер окна для сглаживания
+        weights: веса для среднего (по умолчанию равные)
+        Возвращает: сглаженный массив RSSI
         """
-        rssi_seq = np.array(rssi_sequence)
-        rssi_seq[(rssi_seq < low_threshold) | (rssi_seq > high_threshold)] = np.nan
-        if np.all(np.isnan(rssi_seq)):
+        if not rssi_sequence:
+            print("Предупреждение: пустая входная последовательность")
             return np.array([])
-        median_val = np.nanmedian(rssi_seq)
-        rssi_seq = np.nan_to_num(rssi_seq, nan=median_val)
-        filtered = signal.medfilt(rssi_seq, kernel_size=kernel_size)
-        return filtered
+
+        try:
+            rssi_seq = np.array(rssi_sequence, dtype=float)
+        except (ValueError, TypeError) as e:
+            print(f"Ошибка: некорректные входные данные - {e}")
+            return np.array([])
+
+        print("Входной RSSI:", rssi_seq)
+
+        # Проверка на NaN и их замена медианой
+        if np.any(np.isnan(rssi_seq)):
+            median_val = np.nanmedian(rssi_seq)
+            rssi_seq = np.nan_to_num(rssi_seq, nan=median_val)
+            print("RSSI после замены NaN:", rssi_seq)
+
+        # Взвешенное скользящее среднее
+        if weights is None:
+            weights = np.ones(window_size) / window_size  # Равные веса
+        smoothed = np.convolve(rssi_seq, weights, mode='valid')
+        print("Сглаженный RSSI (взвешенное среднее):", smoothed)
+        return smoothed
 
     def kalman_update(self, measurement):
         """Обновление Kalman для одного измерения RSSI."""
@@ -70,16 +88,25 @@ class RSSIProcessor:
         self.kf_P = (1 - K) * P_pred
         return self.kf_x
 
-    def process_rssi(self, rssi_sequence):
+    def process_rssi(self, rssi_sequence, window_size=3):
         """
-        Полная обработка: предобработка + Kalman.
+        Полная обработка: взвешенное среднее + Kalman.
         rssi_sequence: сырая последовательность RSSI
+        window_size: размер окна для сглаживания
         Возвращает: сглаженный массив RSSI
         """
-        preprocessed = self.preprocess_rssi(rssi_sequence)
-        if len(preprocessed) == 0:
+        # Мягкое сглаживание
+        smoothed_rssi = self.smooth_rssi(rssi_sequence, window_size)
+        if len(smoothed_rssi) == 0:
+            print("Предупреждение: после сглаживания получен пустой массив")
             return np.array([])
-        self.kf_x = preprocessed[0]
+
+        # Сброс Kalman state для новой последовательности
+        self.kf_x = smoothed_rssi[0] if len(smoothed_rssi) > 0 else self.measured_power
         self.kf_P = 1.0
-        smoothed = [self.kalman_update(rssi) for rssi in preprocessed]
-        return np.array(smoothed)
+        # Применение Kalman к сглаженным данным
+        final_rssi = [self.kalman_update(rssi) for rssi in smoothed_rssi]
+        print("Финальный RSSI (после Kalman):", final_rssi)
+        return np.array(final_rssi)
+    
+    
