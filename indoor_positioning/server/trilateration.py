@@ -8,48 +8,25 @@ Indoor Positioning System - Positioning Evaluations Module
 import numpy as np
 import logging
 from typing import Dict, List, Tuple, Optional, Any
-from upgradeRSSI import RSSIProcessor  # Импорт RSSIProcessor из отдельного файла
 
 logger = logging.getLogger(__name__)
+
 
 class TrilaterationEngine:
     """Движок для расчета позиции в 3D-пространстве методом трилатерации."""
 
     def __init__(self, room_config: Dict[str, Any]) -> None:
         self.room_config = room_config
-        # Инициализация RSSIProcessor для обработки RSSI
-        self.rssi_processor = RSSIProcessor()
 
-    def calculate_position(self, anchor_rssi_sequences: Dict[str, List[float]]) -> Optional[Dict[str, float]]:
-        """Основная функция расчета позиции с автоматическим выбором метода.
-        
-        Обрабатывает RSSI для получения сглаженных расстояний.
-        """
+    def calculate_position(self, anchor_distances: Dict[str, float]) -> Optional[Dict[str, float]]:
+        """Основная функция расчета позиции с автоматическим выбором метода."""
         try:
-            if len(anchor_rssi_sequences) < 2:
-                return None
-
-            print(f"🎯 Начало расчета позиции для {len(anchor_rssi_sequences)} якорей")
-
-            # Обработка RSSI и вычисление расстояний
-            anchor_distances = {}
-            for anchor_id, rssi_seq in anchor_rssi_sequences.items():
-                if not rssi_seq:
-                    continue
-                # Обработка последовательности RSSI
-                smoothed_rssi = self.rssi_processor.process_rssi(rssi_seq)
-                if len(smoothed_rssi) == 0:
-                    continue
-                # Используем среднее сглаженного RSSI для вычисления расстояния
-                avg_smoothed_rssi = np.mean(smoothed_rssi)
-                distance = self.rssi_processor.rssi_to_distance(avg_smoothed_rssi)
-                anchor_distances[anchor_id] = distance
-                print(f"📡 Якорь {anchor_id}: Сглаженное RSSI={avg_smoothed_rssi:.2f} dBm -> Расстояние={distance:.2f} m")
-
             if len(anchor_distances) < 2:
                 return None
 
-            # Пробуем последовательно разные методы (как раньше, но с обработанными расстояниями)
+            print(f"🎯 Начало расчета позиции для {len(anchor_distances)} якорей")
+
+            # Пробуем последовательно разные методы
             position = self.trilateration_3d(anchor_distances)
             if not position or not self.is_valid_position(position):
                 position = self.trilateration_2d_plus(anchor_distances)

@@ -5,10 +5,10 @@
 const char* serverURL = "http://192.168.0.244:5000";
 
 // Координаты якоря
-float anchor_x = 20.0;
-float anchor_y = 0.0;  
+float anchor_x = 0.0;
+float anchor_y = 15.0;  
 float anchor_z = 2.5;
-String anchor_id = "Якорь_2";
+String anchor_id = "Якорь_4";
 
 // Данные WiFi для подключения к роутеру
 const char* wifi_ssid = "DESKTOP-JVL1750 9295";

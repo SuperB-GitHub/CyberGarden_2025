@@ -9,7 +9,6 @@
 </head>
 <body>
     <div class="container">
-        <!-- Header -->
         <header class="header">
             <h1>📡 Система позиционирования в помещении</h1>
             <div class="status-bar">
@@ -36,19 +35,16 @@
             </div>
         </header>
 
-        <!-- Main Content -->
         <div class="main-content">
-            <!-- Left Panel - Map & Controls -->
             <div class="map-container">
                 <h2>📍 Карта позиционирования в реальном времени</h2>
 
-                <!-- System Controls -->
                 <div class="controls">
-                    <button class="btn btn-primary" id="reset-btn" onclick="resetSystem()">
-                        🔄 Сбросить систему
+                    <button class="btn btn-success" id="toggle-btn" onclick="togglePositioning()">
+                        ⏹️ Остановить
                     </button>
-                    <button class="btn btn-info" id="refresh-btn" onclick="refreshData()">
-                        🔁 Обновить данные
+                    <button class="btn btn-primary" onclick="openConfig()">
+                        ⚙️ Конфигурация
                     </button>
                     <div class="view-controls">
                         <label class="toggle-label">
@@ -62,7 +58,6 @@
                     </div>
                 </div>
 
-                <!-- Statistics Panel -->
                 <div class="statistics-panel">
                     <div class="stat-item">
                         <span class="stat-label">Последнее обновление:</span>
@@ -78,9 +73,7 @@
                     </div>
                 </div>
 
-                <!-- Map Canvas -->
                 <div class="map" id="map">
-                    <!-- Map elements will be added dynamically -->
                     <div class="room-outline"></div>
                     <div class="grid-lines"></div>
                     <div id="anchors-container" class="anchors-container"></div>
@@ -88,7 +81,6 @@
                     <div id="confidence-circles" class="confidence-circles"></div>
                 </div>
 
-                <!-- Legend -->
                 <div class="legend">
                     <div class="legend-item">
                         <div class="legend-color anchor-color"></div>
@@ -105,9 +97,7 @@
                 </div>
             </div>
 
-            <!-- Right Panel - Information -->
             <div class="info-panel">
-                <!-- Anchors Status -->
                 <div class="info-section">
                     <h3>📡 Статус якорей</h3>
                     <div id="anchors-list" class="anchors-list">
@@ -115,7 +105,6 @@
                     </div>
                 </div>
 
-                <!-- Detected Devices -->
                 <div class="info-section">
                     <h3>📱 Обнаруженные устройства</h3>
                     <div id="devices-list" class="devices-list">
@@ -123,7 +112,6 @@
                     </div>
                 </div>
 
-                <!-- Position Details -->
                 <div class="info-section">
                     <h3>🎯 Детали позиционирования</h3>
                     <div id="position-details" class="position-details">
@@ -131,7 +119,6 @@
                     </div>
                 </div>
 
-                <!-- System Log -->
                 <div class="info-section">
                     <div class="log-header">
                         <h3>📋 Системный лог</h3>
@@ -145,6 +132,54 @@
                             <span class="log-message log-type-info">Система инициализирована. Ожидание данных от якорей...</span>
                         </div>
                     </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Модальное окно конфигурации -->
+    <div id="config-modal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>⚙️ Конфигурация системы</h2>
+                <button class="close-btn" onclick="closeConfigModal()">&times;</button>
+            </div>
+
+            <div class="modal-body">
+                <!-- Сообщения об ошибках -->
+                <div class="config-errors" id="config-errors"></div>
+
+                <div class="config-section">
+                    <h3>Размеры комнаты</h3>
+                    <div class="config-form">
+                        <div class="config-row">
+                            <label>Ширина (м):</label>
+                            <input type="number" id="room-width" step="0.1" min="1" max="100">
+                            <div class="validation-hint">Макс: 100м</div>
+                        </div>
+                        <div class="config-row">
+                            <label>Длина (м):</label>
+                            <input type="number" id="room-height" step="0.1" min="1" max="100">
+                            <div class="validation-hint">Макс: 100м</div>
+                        </div>
+                        <div class="config-row">
+                            <label>Высота (м):</label>
+                            <input type="number" id="room-depth" step="0.1" min="1" max="20">
+                            <div class="validation-hint">Макс: 20м</div>
+                        </div>
+                        <button class="btn btn-primary" onclick="saveRoomConfig()">💾 Сохранить размеры</button>
+                    </div>
+                </div>
+
+                <div class="config-section">
+                    <h3>Конфигурация якорей</h3>
+                    <div class="validation-hint" style="margin-bottom: 15px;">
+                        Для работы системы необходимо минимум 2 активных якоря
+                    </div>
+                    <div id="anchors-config-container" class="anchors-config-container">
+                        <!-- Динамически заполняется -->
+                    </div>
+                    <button class="btn btn-primary" onclick="saveAnchorsConfig()">💾 Сохранить якоря</button>
                 </div>
             </div>
         </div>
