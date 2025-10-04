@@ -637,7 +637,138 @@ class IndoorPositioningApp {
         });
     }
 
-    // Остальные методы (updateDeviceOnMap, removeDeviceFromMap, и т.д.) остаются без изменений
+    renderAnchorsList() {
+        const container = document.getElementById('anchors-list');
+        if (!container) return;
+
+        container.innerHTML = '';
+
+        this.anchors.forEach((anchor, anchorId) => {
+            const anchorElement = document.createElement('div');
+            anchorElement.className = `anchor-item ${anchor.status === 'active' ? 'active' : 'inactive'}`;
+            anchorElement.innerHTML = `
+                <div class="anchor-header">
+                    <span class="anchor-id">${anchorId}</span>
+                    <span class="anchor-status ${anchor.status === 'active' ? 'status-active' : 'status-inactive'}">
+                        ${anchor.status === 'active' ? 'АКТИВЕН' : 'НЕАКТИВЕН'}
+                    </span>
+                </div>
+                <div class="anchor-coords">
+                    X: ${anchor.x}, Y: ${anchor.y}, Z: ${anchor.z}
+                </div>
+                <div class="anchor-update">
+                    Обновлен: ${new Date(anchor.last_update).toLocaleTimeString()}
+                </div>
+            `;
+            container.appendChild(anchorElement);
+        });
+    }
+
+    renderDevicesList() {
+        const container = document.getElementById('devices-list');
+        if (!container) return;
+
+        container.innerHTML = '';
+
+        this.devices.forEach((device, deviceId) => {
+            const position = this.positions.get(deviceId);
+            const deviceElement = document.createElement('div');
+            deviceElement.className = `device-item ${this.selectedDevice === deviceId ? 'selected' : ''}`;
+            deviceElement.setAttribute('data-device-id', deviceId);
+
+            let positionInfo = 'Позиция не определена';
+            let confidenceInfo = '';
+
+            if (position) {
+                positionInfo = `X: ${position.position.x.toFixed(2)}, Y: ${position.position.y.toFixed(2)}, Z: ${position.position.z.toFixed(2)}`;
+                confidenceInfo = `Доверие: ${(position.confidence * 100).toFixed(1)}%`;
+            }
+
+            deviceElement.innerHTML = `
+                <div class="device-header">
+                    <span class="device-mac">${this.formatMacAddress(deviceId)}</span>
+                    <span class="device-type">${device.type || 'mobile_device'}</span>
+                </div>
+                <div class="device-position">${positionInfo}</div>
+                <div class="device-confidence">${confidenceInfo}</div>
+                <div class="device-first-seen">
+                    Обнаружен: ${new Date(device.first_seen).toLocaleTimeString()}
+                </div>
+            `;
+
+            deviceElement.addEventListener('click', () => {
+                this.selectDevice(deviceId);
+            });
+
+            container.appendChild(deviceElement);
+        });
+    }
+
+    selectDevice(deviceId) {
+        this.selectedDevice = deviceId;
+
+        // Обновляем выделение в списке
+        document.querySelectorAll('.device-item').forEach(item => {
+            item.classList.remove('selected');
+        });
+
+        const selectedElement = document.querySelector(`[data-device-id="${deviceId}"]`);
+        if (selectedElement) {
+            selectedElement.classList.add('selected');
+        }
+
+        this.showPositionDetails(deviceId);
+    }
+
+    showPositionDetails(deviceId) {
+        const device = this.devices.get(deviceId);
+        const position = this.positions.get(deviceId);
+        const detailsContainer = document.getElementById('position-details');
+
+        if (!detailsContainer) return;
+
+        if (!device || !position) {
+            detailsContainer.innerHTML = '<div class="no-selection">Выберите устройство для просмотра деталей</div>';
+            return;
+        }
+
+        detailsContainer.innerHTML = `
+            <h3>Детали позиции</h3>
+            <div class="device-details">
+                <p><strong>MAC адрес:</strong> ${this.formatMacAddress(deviceId)}</p>
+                <p><strong>Тип:</strong> ${device.type || 'mobile_device'}</p>
+                <p><strong>Первое обнаружение:</strong> ${new Date(device.first_seen).toLocaleString()}</p>
+                <p><strong>Позиция:</strong> X: ${position.position.x.toFixed(2)}, Y: ${position.position.y.toFixed(2)}, Z: ${position.position.z.toFixed(2)}</p>
+                <p><strong>Доверие:</strong> ${(position.confidence * 100).toFixed(1)}%</p>
+                <p><strong>Якорей использовано:</strong> ${position.anchors_used}</p>
+                <p><strong>Последнее обновление:</strong> ${new Date(position.timestamp).toLocaleString()}</p>
+            </div>
+        `;
+    }
+
+    clearPositionDetails() {
+        const detailsContainer = document.getElementById('position-details');
+        if (detailsContainer) {
+            detailsContainer.innerHTML = '<div class="no-selection">Выберите устройство для просмотра деталей</div>';
+        }
+    }
+
+    updateDeviceInList(deviceId, position, confidence) {
+        const deviceElement = document.querySelector(`[data-device-id="${deviceId}"]`);
+        if (!deviceElement) return;
+
+        const positionElement = deviceElement.querySelector('.device-position');
+        const confidenceElement = deviceElement.querySelector('.device-confidence');
+
+        if (positionElement) {
+            positionElement.textContent = `X: ${position.x.toFixed(2)}, Y: ${position.y.toFixed(2)}, Z: ${position.z.toFixed(2)}`;
+        }
+
+        if (confidenceElement) {
+            confidenceElement.textContent = `Доверие: ${(confidence * 100).toFixed(1)}%`;
+        }
+    }
+
     updateDeviceOnMap(data) {
         const container = document.getElementById('devices-container');
         const confidenceContainer = document.getElementById('confidence-circles');

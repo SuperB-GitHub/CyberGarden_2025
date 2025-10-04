@@ -524,7 +524,6 @@ def emit_log(message, log_type='info'):
     logger.info(f"📝 {log_type.upper()}: {message}")
     socketio.emit('log_message', log_data)
 
-
 def background_task():
     """Фоновая задача для обслуживания данных системы"""
     logger.info("🔄 Background task started")
@@ -556,7 +555,6 @@ def background_task():
             logger.error(f"❌ Background task error: {e}")
 
         time.sleep(2)
-
 
 def _update_active_anchors_count():
     """Обновляет счетчик активных якорей в статистике"""
