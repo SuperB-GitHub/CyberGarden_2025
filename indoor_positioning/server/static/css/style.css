@@ -289,10 +289,19 @@ body {
 .anchor-status.active { color: #27ae60; }
 .anchor-status.inactive { color: #e74c3c; }
 
-.anchor-coordinates, .device-position {
+/* Улучшаем отображение координат в списке */
+.anchor-coordinates {
     font-family: 'Courier New', monospace;
     font-size: 0.8em;
     color: #7f8c8d;
+    text-align: right;
+}
+
+/* Для device coordinates тоже обновим */
+.device-position {
+    font-family: 'Courier New', monospace;
+    font-size: 0.9em;
+    color: #2c3e50;
 }
 
 /* Position Details */
@@ -301,6 +310,7 @@ body {
     font-size: 0.9em;
 }
 
+* Детали позиции */
 .detail-item {
     display: flex;
     justify-content: space-between;
@@ -314,11 +324,13 @@ body {
 
 .detail-label {
     color: #7f8c8d;
+    font-weight: 500;
 }
 
 .detail-value {
     color: #2c3e50;
     font-weight: bold;
+    font-family: 'Courier New', monospace;
 }
 
 /* System Log */

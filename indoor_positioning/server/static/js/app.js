@@ -230,6 +230,8 @@ class IndoorPositioningApp {
 
             point.style.left = `${x}%`;
             point.style.top = `${y}%`;
+
+            // Обновляем tooltip с Z-координатой
             point.title = `${anchorId}\nКоординаты: (${anchor.x}, ${anchor.y}, ${anchor.z})`;
 
             point.addEventListener('click', () => {
@@ -353,8 +355,8 @@ class IndoorPositioningApp {
                 <span class="detail-value">${deviceId}</span>
             </div>
             <div class="detail-item">
-                <span class="detail-label">Координаты:</span>
-                <span class="detail-value">X: ${position.position.x.toFixed(2)}м, Y: ${position.position.y.toFixed(2)}м</span>
+                <span class="detail-label">Координаты (3D):</span>
+                <span class="detail-value">X: ${position.position.x.toFixed(2)}м, Y: ${position.position.y.toFixed(2)}м, Z: ${position.position.z.toFixed(2)}м</span>
             </div>
             <div class="detail-item">
                 <span class="detail-label">Точность:</span>
@@ -386,8 +388,8 @@ class IndoorPositioningApp {
                 <span class="detail-value">${anchorId}</span>
             </div>
             <div class="detail-item">
-                <span class="detail-label">Координаты:</span>
-                <span class="detail-value">X: ${anchor.x}м, Y: ${anchor.y}м, Z: ${anchor.z}м</span>
+                <span class="detail-label">Координаты (3D):</span>
+                <span class="detail-value">X: ${anchor.x}m, Y: ${anchor.y}m, Z: ${anchor.z}m</span>
             </div>
             <div class="detail-item">
                 <span class="detail-label">Статус:</span>
@@ -444,7 +446,7 @@ class IndoorPositioningApp {
                     <div class="anchor-status ${anchor.status}">${this.getAnchorStatusText(anchor.status)}</div>
                 </div>
                 <div class="anchor-coordinates">
-                    (${anchor.x}, ${anchor.y})
+                    (${anchor.x}, ${anchor.y}, ${anchor.z})
                 </div>
             `;
 
@@ -473,7 +475,7 @@ class IndoorPositioningApp {
             deviceElement.setAttribute('data-device-id', deviceId);
 
             const positionText = position ?
-                `(${position.position.x.toFixed(1)}, ${position.position.y.toFixed(1)})` :
+                `(${position.position.x.toFixed(1)}, ${position.position.y.toFixed(1)}, ${position.position.z.toFixed(1)})` :
                 'Нет данных';
 
             const confidenceText = position ?
