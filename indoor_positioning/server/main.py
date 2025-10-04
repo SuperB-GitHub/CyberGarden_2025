@@ -3,10 +3,11 @@ from flask_socketio import SocketIO, emit
 import time
 import threading
 from datetime import datetime
-import math
-import numpy as np
 from collections import defaultdict, deque
 import logging
+
+# Добавляем импорт модуля трилатерации
+from trilateration import TrilaterationEngine, calculate_confidence
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'indoor_positioning_secret'
@@ -41,6 +42,9 @@ room_config = {
         'Якорь_4': {'x': 0, 'y': 15, 'z': 1.0}
     }
 }
+
+# Инициализируем движок трилатерации
+trilateration_engine = TrilaterationEngine(room_config)
 
 # Статистика системы
 statistics = {
@@ -159,7 +163,7 @@ def receive_anchor_data():
         statistics['anchor_updates'] += 1
         system_status['total_updates'] += 1
 
-        # Показываем общую статистику (ИСПРАВЛЕННАЯ ЧАСТЬ)
+        # Показываем общую статистику
         print(f"📊 Всего устройств в системе: {len(anchor_data)}")
         for mac, measurements_list in anchor_data.items():
             # Берем последние 10 измерений или все, если меньше 10
@@ -180,7 +184,7 @@ def receive_anchor_data():
 
 
 def calculate_positions():
-    """Вычисляем позиции устройств с улучшенной обработкой"""
+    """Вычисляем позиции устройств используя модуль трилатерации"""
     try:
         print(f"\n🔍 === НАЧАЛО РАСЧЕТА ПОЗИЦИЙ ===")
 
@@ -208,12 +212,9 @@ def calculate_positions():
                     avg_distances[anchor_id] = sum(distances) / len(distances)
 
                 print(f"🎯 Якорей для расчета {mac}: {len(avg_distances)}")
-                position = trilateration_3d(avg_distances)
 
-                # Если позиция рассчитана, но вне комнаты - корректируем
-                if position and not is_valid_position(position, room_config):
-                    print(f"🔄 Корректируем позицию для {mac}")
-                    position = correct_position(position, room_config)
+                # ИСПОЛЬЗУЕМ МОДУЛЬ ТРИЛАТЕРАЦИИ
+                position = trilateration_engine.calculate_position(avg_distances)
 
                 if position:
                     confidence = calculate_confidence(avg_distances, position)
@@ -222,7 +223,6 @@ def calculate_positions():
                         'position': position,
                         'timestamp': datetime.now().isoformat(),
                         'confidence': confidence * 0.8 if len(avg_distances) == 2 else confidence,
-                        # Понижаем уверенность для 2 якорей
                         'anchors_used': len(avg_distances),
                         'type': devices[mac]['type'] if mac in devices else 'unknown'
                     }
@@ -252,263 +252,6 @@ def calculate_positions():
     except Exception as e:
         logger.error(f"Ошибка расчета позиций: {e}")
         statistics['calculation_errors'] += 1
-
-
-def correct_position(position, room_config):
-    """Корректируем позицию чтобы она была внутри комнаты"""
-    x = max(0.5, min(room_config['width'] - 0.5, position['x']))
-    y = max(0.5, min(room_config['height'] - 0.5, position['y']))
-    z = max(0.5, min(3.0, position['z']))
-
-    corrected = {'x': x, 'y': y, 'z': z}
-    print(f"   📍 Скорректированная позиция: {corrected}")
-    return corrected
-
-
-def trilateration_3d(anchor_distances):
-    """3D трилатерация с умным fallback на 2D"""
-    try:
-        print(f"🎯 Начало 3D трилатерации для {len(anchor_distances)} якорей")
-
-        # Собираем координаты якорей и расстояния
-        anchors_list = []
-        distances_list = []
-
-        for anchor_id, distance in anchor_distances.items():
-            if anchor_id in room_config['anchors']:
-                anchor = room_config['anchors'][anchor_id]
-                anchors_list.append([anchor['x'], anchor['y'], anchor['z']])
-                distances_list.append(distance)
-                print(f"📍 Якорь {anchor_id}: ({anchor['x']}, {anchor['y']}, {anchor['z']}) -> {distance}m")
-
-        if len(anchors_list) < 3:
-            print("❌ Недостаточно якорей для трилатерации")
-            return None
-
-        # Проверяем, есть ли разница в Z-координатах для настоящей 3D
-        z_coords = [anchor[2] for anchor in anchors_list]
-        z_variation = max(z_coords) - min(z_coords)
-
-        if z_variation < 0.5:  # Если высоты почти одинаковые
-            print(f"⚠️  Малая вариация высот ({z_variation:.2f}m), используем 2D+ трилатерацию")
-            return trilateration_2d_plus(anchor_distances)
-
-        # Продолжаем с 3D трилатерацией...
-        # ... ваш существующий код 3D трилатерации ...
-
-    except Exception as e:
-        print(f"❌ Ошибка 3D трилатерации: {e}")
-        return trilateration_2d_plus(anchor_distances)
-
-
-def trilateration_2d_plus(anchor_distances):
-    """2D трилатерация с разумной оценкой Z-координаты"""
-    try:
-        print("🔄 Используем 2D+ трилатерацию с оценкой высоты")
-
-        # Собираем координаты якорей и расстояния (игнорируем Z для расчета X,Y)
-        anchors_list = []
-        distances_list = []
-        z_coords = []
-
-        for anchor_id, distance in anchor_distances.items():
-            if anchor_id in room_config['anchors']:
-                anchor = room_config['anchors'][anchor_id]
-                anchors_list.append([anchor['x'], anchor['y']])  # Только X, Y для 2D
-                distances_list.append(distance)
-                z_coords.append(anchor['z'])
-
-        if len(anchors_list) < 3:
-            return None
-
-        # 2D трилатерация для X,Y
-        A = []
-        b = []
-
-        for i in range(1, len(anchors_list)):
-            xi, yi = anchors_list[i]
-            x0, y0 = anchors_list[0]
-            di = distances_list[i]
-            d0 = distances_list[0]
-
-            A_i = [2 * (xi - x0), 2 * (yi - y0)]
-            b_i = (di ** 2 - d0 ** 2 - xi ** 2 + x0 ** 2 - yi ** 2 + y0 ** 2)
-
-            A.append(A_i)
-            b.append(b_i)
-
-        A = np.array(A)
-        b = np.array(b)
-
-        if np.linalg.matrix_rank(A) < 2:
-            print("❌ 2D матрица также вырождена, используем геометрический метод")
-            return simple_geometric_method_3d(anchor_distances)
-
-        position_2d = np.linalg.lstsq(A, b, rcond=None)[0]
-
-        # Проверяем на NaN
-        if np.any(np.isnan(position_2d)):
-            return simple_geometric_method_3d(anchor_distances)
-
-        # ОЦЕНИВАЕМ Z-координату разумным способом
-        z_coordinate = estimate_smart_z_coordinate(position_2d[0], position_2d[1], anchor_distances)
-
-        result = {
-            'x': float(position_2d[0]),
-            'y': float(position_2d[1]),
-            'z': float(z_coordinate)  # Теперь это разумная оценка, а не 0!
-        }
-
-        print(f"✅ Успешная 2D+ трилатерация: {result}")
-        return result
-
-    except Exception as e:
-        print(f"❌ Ошибка 2D+ трилатерации: {e}")
-        return simple_geometric_method_3d(anchor_distances)
-
-
-def estimate_smart_z_coordinate(x, y, anchor_distances):
-    """Умная оценка Z-координаты на основе контекста"""
-    try:
-        # Собираем информацию о якорях
-        anchors_info = []
-        for anchor_id, distance in anchor_distances.items():
-            if anchor_id in room_config['anchors']:
-                anchor = room_config['anchors'][anchor_id]
-                anchors_info.append({
-                    'z': anchor['z'],
-                    'distance': distance,
-                    'x': anchor['x'],
-                    'y': anchor['y']
-                })
-
-        # Метод 1: Средневзвешенная высота по расстояниям
-        total_weight = 0
-        z_weighted = 0
-
-        for anchor in anchors_info:
-            # Ближайшие якоря имеют больший вес в определении высоты
-            weight = 1.0 / (anchor['distance'] + 0.1)
-            z_weighted += anchor['z'] * weight
-            total_weight += weight
-
-        avg_z = z_weighted / total_weight if total_weight > 0 else 1.5
-
-        # Метод 2: Учитываем позицию в комнате
-        room_height = 3.0  # Предполагаемая высота комнаты
-
-        # Если устройство близко к стенам - вероятно на полу или низко
-        close_to_wall = (x < 2.0 or x > 18.0 or y < 2.0 or y > 13.0)
-
-        # Если устройство в центре комнаты - вероятно на уровне человека
-        in_center = (5.0 < x < 15.0 and 5.0 < y < 10.0)
-
-        # Корректируем оценку based на позиции
-        if close_to_wall:
-            # У стен - вероятно на полу или низко расположенные объекты
-            z_estimate = max(0.3, avg_z * 0.7)
-        elif in_center:
-            # В центре - вероятно человек (1.2-1.8м)
-            z_estimate = min(room_height * 0.6, max(1.0, avg_z))
-        else:
-            # В остальных случаях - среднее значение
-            z_estimate = avg_z
-
-        # Ограничиваем разумными пределами
-        z_estimate = max(0.3, min(room_height - 0.5, z_estimate))
-
-        print(f"   📊 Умная оценка Z: {z_estimate:.2f}m (среднее: {avg_z:.2f}m)")
-        return z_estimate
-
-    except Exception as e:
-        print(f"   ⚠️  Ошибка оценки Z, используем значение по умолчанию: {e}")
-        return 1.5  # Рост человека по умолчанию
-
-
-def simple_geometric_method_3d(anchor_distances):
-    """Упрощенный геометрический метод с разумной Z-координатой"""
-    try:
-        print("🔄 Используем упрощенный 3D геометрический метод")
-
-        anchor_ids = list(anchor_distances.keys())
-        anchors = []
-        distances = []
-
-        for anchor_id in anchor_ids:
-            if anchor_id in room_config['anchors']:
-                anchor = room_config['anchors'][anchor_id]
-                anchors.append(anchor)
-                distances.append(anchor_distances[anchor_id])
-
-        if len(anchors) < 2:
-            return None
-
-        # Метод взвешенного центра в 3D
-        total_weight = 0
-        x_sum = 0
-        y_sum = 0
-        z_sum = 0
-
-        for i, anchor in enumerate(anchors):
-            # Вес обратно пропорционален расстоянию
-            weight = 1.0 / (distances[i] + 0.1)
-            x_sum += anchor['x'] * weight
-            y_sum += anchor['y'] * weight
-            z_sum += anchor['z'] * weight
-            total_weight += weight
-
-        if total_weight > 0:
-            x = x_sum / total_weight
-            y = y_sum / total_weight
-            z = z_sum / total_weight
-
-            # Корректируем Z на основе логики
-            z = estimate_smart_z_coordinate(x, y, anchor_distances)
-
-            # Ограничиваем координаты комнатой
-            x = max(0.5, min(room_config['width'] - 0.5, x))
-            y = max(0.5, min(room_config['height'] - 0.5, y))
-            z = max(0.5, min(3.0, z))
-
-            result = {'x': x, 'y': y, 'z': z}
-            print(f"✅ Упрощенный 3D метод: {result}")
-            return result
-
-        return None
-
-    except Exception as e:
-        print(f"❌ Ошибка упрощенного 3D метода: {e}")
-        # Всегда возвращаем валидную позицию с разумной Z
-        return {'x': 10.0, 'y': 7.5, 'z': 1.5}  # Центр комнаты, уровень человека
-
-
-def is_valid_position(position, room_config):
-    """Проверяем, что позиция находится в пределах комнаты в 3D"""
-    x, y, z = position['x'], position['y'], position['z']
-    valid = (0 <= x <= room_config['width'] and
-             0 <= y <= room_config['height'] and
-             0 <= z <= 4.0)  # Максимальная высота 4 метра
-
-    if not valid:
-        print(f"⚠️  Позиция вне комнаты: ({x:.2f}, {y:.2f}, {z:.2f})")
-
-    return valid
-
-
-def calculate_confidence(distances, position):
-    """Вычисляем уверенность в расчете позиции"""
-    try:
-        # На основе согласованности расстояний
-        variance = np.var(list(distances.values()))
-        confidence = max(0.1, 1.0 - variance / 10.0)  # Нормализуем
-
-        # Учитываем количество якорей
-        anchor_count = len(distances)
-        confidence *= min(1.0, anchor_count / 4.0)
-
-        return round(confidence, 2)
-    except:
-        return 0.5
 
 
 def generate_color_from_mac(mac):
