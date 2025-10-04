@@ -5,4 +5,4 @@ venv/
 
 *.log
 
-.__pycahe__/
+./indoor_positioning/server__pycahe__/
