@@ -1,3 +1,10 @@
+/**
+ * Indoor Positioning System - Frontend Application
+ *
+ * Основной клиентский модуль системы позиционирования.
+ * Обеспечивает веб-интерфейс для отображения позиций в реальном времени,
+ * управление системой и визуализацию данных.
+ */
 class IndoorPositioningApp {
     constructor() {
         this.socket = io();
@@ -5,14 +12,17 @@ class IndoorPositioningApp {
             width: 20,
             height: 15
         };
-        this.anchors = new Map();
-        this.devices = new Map();
-        this.positions = new Map();
-        this.selectedDevice = null;
+        this.anchors = new Map();      // Активные якоря
+        this.devices = new Map();      // Обнаруженные устройства
+        this.positions = new Map();    // Рассчитанные позиции
+        this.selectedDevice = null;    // Выбранное устройство на карте
 
         this.init();
     }
 
+    /**
+     * Инициализация приложения
+     */
     init() {
         this.setupSocketListeners();
         this.setupEventListeners();
@@ -21,8 +31,11 @@ class IndoorPositioningApp {
         this.requestInitialData();
     }
 
+    /**
+     * Настройка обработчиков WebSocket событий
+     */
     setupSocketListeners() {
-        // Connection events
+        // События подключения
         this.socket.on('connect', () => {
             this.addLog('Подключено к серверу позиционирования', 'success');
             this.updateSystemStatus('АКТИВНА');
@@ -39,7 +52,7 @@ class IndoorPositioningApp {
             this.updateSystemStatus('ОФФЛАЙН');
         });
 
-        // Data events
+        // События данных
         this.socket.on('anchors_data', (anchors) => {
             console.log('📡 Данные якорей получены:', anchors);
             this.updateAnchorsData(anchors);
@@ -65,7 +78,7 @@ class IndoorPositioningApp {
             this.handleAnchorUpdate(data);
         });
 
-        // System events
+        // Системные события
         this.socket.on('system_status', (status) => {
             this.updateSystemInfo(status);
         });
@@ -91,6 +104,9 @@ class IndoorPositioningApp {
         });
     }
 
+    /**
+     * Обновление данных якорей
+     */
     updateAnchorsData(anchors) {
         this.anchors = new Map(Object.entries(anchors));
         console.log('📊 Якоря обновлены:', this.anchors.size);
@@ -99,6 +115,9 @@ class IndoorPositioningApp {
         this.updateAnchorsCount();
     }
 
+    /**
+     * Обновление данных устройств
+     */
     updateDevicesData(devices) {
         this.devices = new Map(Object.entries(devices));
         console.log('📊 Устройства обновлены:', this.devices.size);
@@ -106,6 +125,9 @@ class IndoorPositioningApp {
         this.updateDevicesCount();
     }
 
+    /**
+     * Обновление данных позиций
+     */
     updatePositionsData(positions) {
         this.positions = new Map(Object.entries(positions));
         console.log('📊 Позиции обновлены:', this.positions.size);
@@ -113,28 +135,32 @@ class IndoorPositioningApp {
         this.renderDevicesList();
     }
 
+    /**
+     * Обработка обновления позиции устройства
+     */
     handlePositionUpdate(data) {
-        // Update position in positions map
         this.positions.set(data.device_id, data);
-
-        // Update device on map
         this.updateDeviceOnMap(data);
-
-        // Update device in list
         this.updateDeviceInList(data.device_id, data.position, data.confidence);
 
-        // Update position details if device is selected
+        // Обновляем детали если устройство выбрано
         if (this.selectedDevice === data.device_id) {
             this.showPositionDetails(data.device_id);
         }
     }
 
+    /**
+     * Обработка обновления данных якоря
+     */
     handleAnchorUpdate(data) {
         this.addLog(`Якорь ${data.anchor_id} обновил данные`, 'info');
     }
 
+    /**
+     * Настройка обработчиков событий UI
+     */
     setupEventListeners() {
-        // System controls
+        // Системные контролы
         window.resetSystem = () => {
             if (confirm('Вы уверены, что хотите сбросить систему? Все данные будут удалены.')) {
                 this.setButtonLoading('reset-btn', true);
@@ -156,7 +182,7 @@ class IndoorPositioningApp {
             }, 1000);
         };
 
-        // View controls
+        // Контролы отображения
         window.toggleConfidenceCircles = () => {
             const show = document.getElementById('show-confidence').checked;
             const circles = document.querySelectorAll('.confidence-circle');
@@ -174,6 +200,9 @@ class IndoorPositioningApp {
         };
     }
 
+    /**
+     * Установка состояния загрузки для кнопок
+     */
     setButtonLoading(buttonId, isLoading) {
         const button = document.getElementById(buttonId);
         if (!button) return;
@@ -196,24 +225,30 @@ class IndoorPositioningApp {
         }
     }
 
+    /**
+     * Отрисовка карты позиционирования
+     */
     renderMap() {
         const map = document.getElementById('map');
 
-        // Clear only device elements
+        // Очищаем только элементы устройств
         const deviceElements = map.querySelectorAll('.device-point, .device-label, .confidence-circle');
         deviceElements.forEach(element => element.remove());
 
-        // Re-render all devices on map
+        // Перерисовываем все устройства на карте
         this.positions.forEach((data, deviceId) => {
             this.updateDeviceOnMap(data);
         });
 
-        // Render anchors if we have them
+        // Отрисовываем якоря если они есть
         if (this.anchors.size > 0) {
             this.renderAnchorsOnMap();
         }
     }
 
+    /**
+     * Отрисовка якорей на карте
+     */
     renderAnchorsOnMap() {
         const container = document.getElementById('anchors-container');
         if (!container) return;
@@ -231,7 +266,7 @@ class IndoorPositioningApp {
             point.style.left = `${x}%`;
             point.style.top = `${y}%`;
 
-            // Обновляем tooltip с Z-координатой
+            // Tooltip с координатами якоря
             point.title = `${anchorId}\nКоординаты: (${anchor.x}, ${anchor.y}, ${anchor.z})`;
 
             point.addEventListener('click', () => {
@@ -242,12 +277,14 @@ class IndoorPositioningApp {
         });
     }
 
+    /**
+     * Отрисовка устройств на карте
+     */
     renderDevicesOnMap() {
         const container = document.getElementById('devices-container');
         const confidenceContainer = document.getElementById('confidence-circles');
         if (!container || !confidenceContainer) return;
 
-        // Clear containers
         container.innerHTML = '';
         confidenceContainer.innerHTML = '';
 
@@ -256,6 +293,9 @@ class IndoorPositioningApp {
         });
     }
 
+    /**
+     * Обновление отображения устройства на карте
+     */
     updateDeviceOnMap(data) {
         const container = document.getElementById('devices-container');
         const confidenceContainer = document.getElementById('confidence-circles');
@@ -264,7 +304,7 @@ class IndoorPositioningApp {
         let point = document.getElementById(`device-${data.device_id}`);
         let confidenceCircle = document.getElementById(`confidence-${data.device_id}`);
 
-        // Create or update device point
+        // Создаем или обновляем точку устройства
         if (!point) {
             point = document.createElement('div');
             point.id = `device-${data.device_id}`;
@@ -276,7 +316,7 @@ class IndoorPositioningApp {
             point.style.background = color;
             point.style.border = `3px solid ${this.darkenColor(color, 20)}`;
 
-            // Add label
+            // Добавляем метку с MAC-адресом
             const label = document.createElement('div');
             label.className = 'device-label';
             label.textContent = this.formatMacAddress(data.device_id);
@@ -290,7 +330,7 @@ class IndoorPositioningApp {
             container.appendChild(point);
         }
 
-        // Create or update confidence circle
+        // Создаем или обновляем круг точности
         if (!confidenceCircle) {
             confidenceCircle = document.createElement('div');
             confidenceCircle.id = `confidence-${data.device_id}`;
@@ -299,32 +339,35 @@ class IndoorPositioningApp {
             confidenceContainer.appendChild(confidenceCircle);
         }
 
-        // Update positions
+        // Обновляем позиции
         const x = (data.position.x / this.roomConfig.width) * 100;
         const y = (data.position.y / this.roomConfig.height) * 100;
 
         point.style.left = `${x}%`;
         point.style.top = `${y}%`;
 
-        // Update confidence circle
-        const radius = (1 - data.confidence) * 50 + 20; // Radius based on confidence
+        // Обновляем круг точности
+        const radius = (1 - data.confidence) * 50 + 20; // Радиус зависит от уверенности
         confidenceCircle.style.left = `${x}%`;
         confidenceCircle.style.top = `${y}%`;
         confidenceCircle.style.width = `${radius * 2}px`;
         confidenceCircle.style.height = `${radius * 2}px`;
 
-        // Set confidence color
+        // Устанавливаем цвет в зависимости от уверенности
         const confidenceClass = data.confidence > 0.8 ? 'confidence-high' :
                                data.confidence > 0.6 ? 'confidence-medium' : 'confidence-low';
         confidenceCircle.className = `confidence-circle ${confidenceClass}`;
 
-        // Update visibility based on settings
+        // Обновляем видимость в зависимости от настроек
         const showConfidence = document.getElementById('show-confidence').checked;
         confidenceCircle.style.display = showConfidence ? 'block' : 'none';
     }
 
+    /**
+     * Выбор устройства на карте
+     */
     selectDevice(deviceId) {
-        // Deselect previous device
+        // Снимаем выделение с предыдущего устройства
         if (this.selectedDevice) {
             const prevPoint = document.getElementById(`device-${this.selectedDevice}`);
             if (prevPoint) {
@@ -332,7 +375,7 @@ class IndoorPositioningApp {
             }
         }
 
-        // Select new device
+        // Выделяем новое устройство
         this.selectedDevice = deviceId;
         const point = document.getElementById(`device-${deviceId}`);
         if (point) {
@@ -342,6 +385,9 @@ class IndoorPositioningApp {
         this.showPositionDetails(deviceId);
     }
 
+    /**
+     * Показ деталей позиции устройства
+     */
     showPositionDetails(deviceId) {
         const position = this.positions.get(deviceId);
         const device = this.devices.get(deviceId);
@@ -377,6 +423,9 @@ class IndoorPositioningApp {
         `;
     }
 
+    /**
+     * Показ деталей якоря
+     */
     showAnchorDetails(anchorId) {
         const anchor = this.anchors.get(anchorId);
         if (!anchor) return;
@@ -402,11 +451,17 @@ class IndoorPositioningApp {
         `;
     }
 
+    /**
+     * Очистка деталей позиции
+     */
     clearPositionDetails() {
         const container = document.getElementById('position-details');
         container.innerHTML = '<div class="no-data">Выберите устройство на карте</div>';
     }
 
+    /**
+     * Обновление устройства в списке
+     */
     updateDeviceInList(deviceId, position, confidence) {
         const deviceElement = document.querySelector(`[data-device-id="${deviceId}"]`);
         if (deviceElement) {
@@ -420,11 +475,14 @@ class IndoorPositioningApp {
                 confidenceElement.textContent = `${(confidence * 100).toFixed(0)}%`;
             }
         } else {
-            // If device element doesn't exist, re-render the list
+            // Перерисовываем список если элемента нет
             this.renderDevicesList();
         }
     }
 
+    /**
+     * Отрисовка списка якорей
+     */
     renderAnchorsList() {
         const container = document.getElementById('anchors-list');
         if (!container) return;
@@ -458,6 +516,9 @@ class IndoorPositioningApp {
         });
     }
 
+    /**
+     * Отрисовка списка устройств
+     */
     renderDevicesList() {
         const container = document.getElementById('devices-list');
         if (!container) return;
@@ -501,6 +562,9 @@ class IndoorPositioningApp {
         });
     }
 
+    /**
+     * Обновление статуса системы
+     */
     updateSystemStatus(status) {
         const element = document.getElementById('system-status');
         if (element) {
@@ -509,6 +573,9 @@ class IndoorPositioningApp {
         }
     }
 
+    /**
+     * Обновление системной информации
+     */
     updateSystemInfo(status) {
         if (status.total_updates !== undefined) {
             document.getElementById('total-updates').textContent = status.total_updates;
@@ -519,6 +586,9 @@ class IndoorPositioningApp {
         }
     }
 
+    /**
+     * Обновление статистики
+     */
     updateStatistics(stats) {
         if (stats.connections !== undefined) {
             document.getElementById('connections-count').textContent = stats.connections;
@@ -534,6 +604,9 @@ class IndoorPositioningApp {
         }
     }
 
+    /**
+     * Обновление счетчика якорей
+     */
     updateAnchorsCount() {
         const countElement = document.getElementById('anchors-count');
         if (countElement) {
@@ -541,6 +614,9 @@ class IndoorPositioningApp {
         }
     }
 
+    /**
+     * Обновление счетчика устройств
+     */
     updateDevicesCount() {
         const countElement = document.getElementById('devices-count');
         if (countElement) {
@@ -548,6 +624,9 @@ class IndoorPositioningApp {
         }
     }
 
+    /**
+     * Добавление записи в системный лог
+     */
     addLog(message, type = 'info') {
         const log = document.getElementById('system-log');
         if (log) {
@@ -564,6 +643,9 @@ class IndoorPositioningApp {
         }
     }
 
+    /**
+     * Обновление времени старта системы
+     */
     updateStartTime() {
         const startTimeElement = document.getElementById('start-time');
         if (startTimeElement) {
@@ -571,8 +653,10 @@ class IndoorPositioningApp {
         }
     }
 
+    /**
+     * Запрос начальных данных с сервера
+     */
     requestInitialData() {
-        // Request initial data from server
         fetch('/api/anchors')
             .then(response => response.json())
             .then(anchors => this.updateAnchorsData(anchors))
@@ -597,12 +681,19 @@ class IndoorPositioningApp {
             .catch(error => console.error('Ошибка загрузки статуса:', error));
     }
 
-    // Utility functions
+    // Вспомогательные функции
+
+    /**
+     * Форматирование MAC-адреса
+     */
     formatMacAddress(mac) {
         if (mac.length <= 12) return mac;
         return mac.match(/.{1,2}/g).join(':').toUpperCase();
     }
 
+    /**
+     * Получение текстового описания типа устройства
+     */
     getDeviceTypeText(type) {
         const types = {
             'mobile_device': 'Мобильное устройство',
@@ -613,6 +704,9 @@ class IndoorPositioningApp {
         return types[type] || type;
     }
 
+    /**
+     * Получение текстового описания статуса якоря
+     */
     getAnchorStatusText(status) {
         const statuses = {
             'active': 'Активен',
@@ -622,6 +716,9 @@ class IndoorPositioningApp {
         return statuses[status] || status;
     }
 
+    /**
+     * Затемнение цвета
+     */
     darkenColor(color, percent) {
         const num = parseInt(color.replace("#", ""), 16);
         const amt = Math.round(2.55 * percent);
@@ -634,7 +731,7 @@ class IndoorPositioningApp {
     }
 }
 
-// Click outside to deselect
+// Обработчик клика вне элементов для снятия выделения
 document.addEventListener('click', (e) => {
     if (!e.target.closest('.device-point') && !e.target.closest('.anchor-point')) {
         if (app && app.selectedDevice) {
@@ -648,13 +745,13 @@ document.addEventListener('click', (e) => {
     }
 });
 
-// Initialize application
+// Инициализация приложения
 let app;
 document.addEventListener('DOMContentLoaded', () => {
     app = new IndoorPositioningApp();
 });
 
-// Global function for log clearing
+// Глобальная функция очистки лога
 window.clearLog = () => {
     const logContainer = document.getElementById('system-log');
     if (logContainer) {
