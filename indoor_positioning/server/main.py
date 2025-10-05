@@ -12,8 +12,49 @@ import logging
 import json
 import os
 import sys
+import numpy as np
+from trilateration import EnhancedTrilaterationEngine, calculate_enhanced_confidence
 
-from trilateration import TrilaterationEngine, calculate_confidence
+
+class AdaptiveKalmanFilter:
+    """Адаптивный фильтр Калмана для RSSI с автоматической настройкой параметров"""
+
+    def __init__(self, process_noise=0.1, measurement_noise=2.0):
+        self.Q = process_noise  # Шум процесса
+        self.R = measurement_noise  # Шум измерения
+        self.P = 1.0  # Ковариация ошибки
+        self.X = 0.0  # Оценка
+        self.measurement_count = 0
+        self.measurement_history = deque(maxlen=10)
+
+    def update(self, measurement, packet_count=1):
+        # Адаптивная настройка шума измерения на основе packet_count
+        adaptive_R = self.R / min(packet_count, 5)  # Уменьшаем шум с ростом packet_count
+
+        # Прогноз
+        self.P = self.P + self.Q
+
+        # Коррекция
+        K = self.P / (self.P + adaptive_R)
+        self.X = self.X + K * (measurement - self.X)
+        self.P = (1 - K) * self.P
+
+        # Сохраняем историю для адаптации
+        self.measurement_history.append(measurement)
+        self.measurement_count += 1
+
+        # Адаптируем шум процесса на основе дисперсии измерений
+        if len(self.measurement_history) >= 5:
+            variance = np.var(list(self.measurement_history))
+            self.Q = max(0.01, min(0.5, variance * 0.1))
+
+        return self.X
+
+    def get_confidence(self):
+        """Возвращает уверенность в текущей оценке"""
+        if self.measurement_count == 0:
+            return 0.0
+        return min(1.0, self.measurement_count / 10.0) * (1.0 / (1.0 + self.P))
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'indoor_positioning_secret'
@@ -52,6 +93,86 @@ DEFAULT_ANCHORS_CONFIG = {
     'Якорь_3': {'x': 20, 'y': 15, 'z': 2.5, 'enabled': True},
     'Якорь_4': {'x': 0, 'y': 15, 'z': 1.0, 'enabled': True}
 }
+
+# Глобальные хранилища для расширенных данных
+device_kalman_filters = defaultdict(AdaptiveKalmanFilter)
+device_channel_data = defaultdict(lambda: deque(maxlen=20))
+device_packet_stats = defaultdict(lambda: {'count': 0, 'first_seen': None})
+
+
+# Функции для обработки частот и коррекции расстояний
+def get_frequency_correction(channel):
+    """Корректировка расстояния на основе частоты канала"""
+    # 2.4 GHz каналы (1-14)
+    if 1 <= channel <= 14:
+        return 1.0  # Базовая коррекция для 2.4GHz
+
+    # 5 GHz каналы (36-165)
+    elif 36 <= channel <= 165:
+        return 0.85  # 5GHz сигналы затухают быстрее
+
+    # Неизвестные каналы
+    else:
+        return 1.0
+
+
+def get_channel_group(channel):
+    """Группировка каналов для калибровки"""
+    if 1 <= channel <= 14:
+        return '2.4GHz'
+    elif 36 <= channel <= 64:
+        return '5GHz_LOW'
+    elif 100 <= channel <= 165:
+        return '5GHz_HIGH'
+    else:
+        return 'UNKNOWN'
+
+
+def apply_channel_correction(distance, channel, rssi_filtered):
+    """Применяет коррекцию расстояния на основе канала и RSSI"""
+    base_correction = get_frequency_correction(channel)
+
+    # Дополнительная коррекция на основе качества сигнала
+    if rssi_filtered > -50:
+        signal_quality_correction = 0.9  # Отличный сигнал
+    elif rssi_filtered > -70:
+        signal_quality_correction = 1.0  # Хороший сигнал
+    else:
+        signal_quality_correction = 1.1  # Слабый сигнал
+
+    corrected_distance = distance * base_correction * signal_quality_correction
+
+    # Ограничиваем разумными пределами
+    return max(0.1, min(50.0, corrected_distance))
+
+
+def calculate_distance_confidence(rssi_filtered, packet_count, channel_consistency):
+    """Рассчитывает уверенность в измерении расстояния"""
+    # Базовая уверенность по RSSI
+    if rssi_filtered > -50:
+        rssi_confidence = 0.95
+    elif rssi_filtered > -65:
+        rssi_confidence = 0.85
+    elif rssi_filtered > -75:
+        rssi_confidence = 0.70
+    elif rssi_filtered > -85:
+        rssi_confidence = 0.50
+    else:
+        rssi_confidence = 0.30
+
+    # Уверенность по количеству пакетов
+    packet_confidence = min(1.0, packet_count / 10.0)
+
+    # Уверенность по стабильности канала
+    channel_confidence = channel_consistency
+
+    # Общая уверенность (взвешенное среднее)
+    total_confidence = (rssi_confidence * 0.5 +
+                        packet_confidence * 0.3 +
+                        channel_confidence * 0.2)
+
+    return max(0.1, min(1.0, total_confidence))
+
 
 def log_system_info():
     """Логирование информации о системе при запуске"""
@@ -120,7 +241,7 @@ load_config()
 anchors = {}  # Активные якоря с временными метками
 devices = {}  # Обнаруженные устройства
 positions = {}  # Рассчитанные позиции
-anchor_data = defaultdict(lambda: deque(maxlen=10))
+anchor_data = defaultdict(list)
 
 # Статус системы
 system_status = {
@@ -141,9 +262,10 @@ statistics = {
 }
 
 # Инициализация движка трилатерации
-trilateration_engine = TrilaterationEngine({
+trilateration_engine = EnhancedTrilaterationEngine({
     'width': room_config['width'],
     'height': room_config['height'],
+    'depth': room_config.get('depth', 5),
     'anchors': {k: v for k, v in anchors_config.items() if v['enabled']}
 })
 logger.info("✅ Trilateration engine initialized")
@@ -208,7 +330,18 @@ def get_anchors():
 
 @app.route('/api/devices')
 def get_devices():
-    return jsonify(dict(devices))
+    try:
+        # Создаем сериализуемую копию devices
+        serializable_devices = {}
+        for mac, device in devices.items():
+            serializable_devices[mac] = device.copy()
+            if 'channels_used' in serializable_devices[mac]:
+                serializable_devices[mac]['channels_used'] = list(serializable_devices[mac]['channels_used'])
+
+        return jsonify(serializable_devices)
+    except Exception as e:
+        logger.error(f"❌ Error serializing devices: {e}")
+        return jsonify({'error': 'Serialization error'}), 500
 
 @app.route('/api/positions')
 def get_positions():
@@ -451,51 +584,145 @@ def receive_anchor_data():
         statistics['calculation_errors'] += 1
         return jsonify({'error': str(e)}), 500
 
+
+def _calculate_channel_consistency(mac):
+    """Рассчитывает согласованность использования каналов"""
+    if mac not in device_channel_data or len(device_channel_data[mac]) < 2:
+        return 0.5  # Средняя уверенность при недостатке данных
+
+    channels = [data['channel'] for data in device_channel_data[mac]]
+    unique_channels = len(set(channels))
+    total_measurements = len(channels)
+
+    # Чем меньше разных каналов используется, тем выше согласованность
+    consistency = 1.0 - (unique_channels / total_measurements) * 0.5
+
+    return max(0.1, min(1.0, consistency))
+
+
 def _process_anchor_measurements(anchor_id, measurements):
     logger.info(f"📊 Processing {len(measurements)} measurements from {anchor_id}")
 
     for measurement in measurements:
+        # Проверяем структуру measurement от маяка
+        if not isinstance(measurement, dict):
+            logger.warning(f"⚠️ Invalid measurement type from anchor: {type(measurement)}")
+            continue
+
         mac = measurement.get('mac')
         distance = measurement.get('distance')
-        rssi = measurement.get('rssi')
 
         if mac and distance is not None:
-            anchor_data[mac].append({
-                'anchor_id': anchor_id,
-                'distance': float(distance),
-                'rssi': rssi,
-                'timestamp': datetime.now().isoformat()
+            # Применяем фильтр Калмана к расстоянию
+            filtered_distance = device_kalman_filters[mac].update(
+                float(distance),
+                measurement.get('packet_count', 1)
+            )
+
+            # Корректируем расстояние на основе частоты канала
+            corrected_distance = apply_channel_correction(
+                filtered_distance,
+                measurement.get('channel', 1),
+                measurement.get('rssi_filtered', measurement.get('rssi', -70))
+            )
+
+            # Сохраняем данные канала для анализа согласованности
+            device_channel_data[mac].append({
+                'channel': measurement.get('channel', 1),
+                'timestamp': datetime.now().isoformat(),
+                'anchor_id': anchor_id
             })
+
+            # Рассчитываем согласованность канала
+            channel_consistency = _calculate_channel_consistency(mac)
+
+            # Рассчитываем уверенность в измерении
+            distance_confidence = calculate_distance_confidence(
+                measurement.get('rssi_filtered', measurement.get('rssi', -70)),
+                measurement.get('packet_count', 1),
+                channel_consistency
+            )
+
+            # Обновляем статистику пакетов
+            if mac not in device_packet_stats:
+                device_packet_stats[mac] = {
+                    'count': 0,
+                    'first_seen': datetime.now().isoformat()
+                }
+            device_packet_stats[mac]['count'] += 1
+
+            # Сохраняем обогащенные данные
+            enriched_measurement = {
+                'anchor_id': anchor_id,
+                'distance': corrected_distance,
+                'distance_original': float(distance),
+                'distance_filtered': filtered_distance,
+                'rssi': measurement.get('rssi'),
+                'rssi_filtered': measurement.get('rssi_filtered', measurement.get('rssi')),
+                'channel': measurement.get('channel', 1),
+                'packet_count': measurement.get('packet_count', 1),
+                'distance_confidence': distance_confidence,
+                'channel_consistency': channel_consistency,
+                'timestamp': datetime.now().isoformat(),
+                'device_timestamp': measurement.get('device_timestamp')
+            }
+
+            # ОГРАНИЧИВАЕМ КОЛИЧЕСТВО ИЗМЕРЕНИЙ (максимум 10)
+            if len(anchor_data[mac]) >= 10:
+                anchor_data[mac].pop(0)  # Удаляем самое старое измерение
+            anchor_data[mac].append(enriched_measurement)
 
             if mac not in devices:
                 devices[mac] = {
                     'mac': mac,
                     'first_seen': datetime.now().isoformat(),
                     'type': 'mobile_device',
-                    'color': _generate_color_from_mac(mac)
+                    'color': _generate_color_from_mac(mac),
+                    'packet_count_total': 0,
+                    'channels_used': [],
+                    'avg_confidence': 0.0
                 }
                 logger.info(f"📱 New device detected: {mac}")
+
+            # Обновляем статистику устройства
+            devices[mac]['packet_count_total'] += 1
+            channel = measurement.get('channel', 1)
+            if channel not in devices[mac]['channels_used']:
+                devices[mac]['channels_used'].append(channel)
+
+            logger.debug(f"📏 Device {mac}: distance {corrected_distance:.2f}m "
+                         f"(conf: {distance_confidence:.2f}, ch: {channel}, "
+                         f"packets: {measurement.get('packet_count', 1)})")
 
 
 def calculate_positions():
     try:
         logger.info(f"🎯 Starting position calculation for {len(anchor_data)} devices")
-
-        # ЛОГИРУЕМ АКТУАЛЬНЫЕ КООРДИНАТЫ ЯКОРЕЙ ИЗ КОНФИГУРАЦИИ
-        enabled_anchors = {k: v for k, v in anchors_config.items() if v.get('enabled', True)}
-        logger.info(f"📊 Using anchors config: {len(enabled_anchors)} enabled anchors")
-        for anchor_id, config in enabled_anchors.items():
-            logger.debug(f"📍 Anchor {anchor_id}: ({config['x']}, {config['y']}, {config['z']})")
+        logger.info(
+            f"📊 Using anchors config: {len([k for k, v in anchors_config.items() if v.get('enabled', True)])} enabled anchors")
 
         calculated_positions = 0
-        for mac, measurements_list in anchor_data.items():
-            anchor_measurements = _group_recent_measurements(measurements_list)
-
-            if len(anchor_measurements) >= 2:
-                if _calculate_device_position(mac, anchor_measurements):
-                    calculated_positions += 1
+        for mac, measurements_deque in anchor_data.items():
+            # ПРЕОБРАЗУЕМ deque В LIST
+            if isinstance(measurements_deque, deque):
+                measurements_list = list(measurements_deque)
             else:
-                logger.debug(f"⚠️ Not enough anchors for {mac}: {len(anchor_measurements)}")
+                measurements_list = measurements_deque
+
+            if not isinstance(measurements_list, list):
+                logger.warning(f"⚠️ Invalid measurements_list for {mac}: {type(measurements_list)}")
+                continue
+
+            if len(measurements_list) == 0:
+                continue
+
+            # Проверяем структуру первого измерения
+            if not isinstance(measurements_list[0], dict):
+                logger.warning(f"⚠️ Invalid measurement structure for {mac}: {type(measurements_list[0])}")
+                continue
+
+            if _calculate_device_position(mac, measurements_list):
+                calculated_positions += 1
 
         statistics['devices_detected'] = len(devices)
         logger.info(f"✅ Position calculation completed: {calculated_positions} positions calculated")
@@ -519,43 +746,81 @@ def _group_recent_measurements(measurements_list):
     return anchor_measurements
 
 
-def _calculate_device_position(mac, anchor_measurements):
-    avg_distances = {}
-    for anchor_id, distances in anchor_measurements.items():
-        avg_distances[anchor_id] = sum(distances) / len(distances)
+def _group_enhanced_measurements(measurements_list):
+    """Группирует измерения по якорям с расширенными данными"""
+    anchor_measurements = {}
+    current_time = datetime.now()
 
-    logger.debug(f"📐 Calculating position for {mac} using anchors: {list(avg_distances.keys())}")
+    for measurement in measurements_list:
+        # Проверяем структуру measurement
+        if not isinstance(measurement, dict):
+            logger.warning(f"⚠️ Invalid measurement type: {type(measurement)}")
+            continue
 
-    # ЛОГИРУЕМ КООРДИНАТЫ ЯКОРЕЙ, ИСПОЛЬЗУЕМЫХ В РАСЧЕТЕ
-    for anchor_id in avg_distances.keys():
-        if anchor_id in anchors_config:
-            config = anchors_config[anchor_id]
-            logger.debug(
-                f"   📍 {anchor_id}: ({config['x']}, {config['y']}, {config['z']}) -> {avg_distances[anchor_id]:.2f}m")
+        measure_time = datetime.fromisoformat(measurement['timestamp'])
+        if (current_time - measure_time).total_seconds() <= 10:
+            anchor_id = measurement['anchor_id']
+            if anchor_id not in anchor_measurements:
+                anchor_measurements[anchor_id] = []
+            anchor_measurements[anchor_id].append(measurement)
 
-    position = trilateration_engine.calculate_position(avg_distances)
+    logger.debug(f"📊 Grouped measurements: {list(anchor_measurements.keys())}")
+    return anchor_measurements
 
-    if position:
-        confidence = calculate_confidence(avg_distances, position)
 
-        positions[mac] = {
-            'position': position,
-            'timestamp': datetime.now().isoformat(),
-            'confidence': confidence * 0.8 if len(avg_distances) == 2 else confidence,
-            'anchors_used': len(avg_distances),
-            'type': devices[mac]['type'] if mac in devices else 'unknown'
-        }
+def _calculate_device_position(mac, measurements_list):
+    try:
+        logger.debug(f"🎯 Calculating position for {mac} with {len(measurements_list)} measurements")
 
-        statistics['position_updates'] += 1
-        system_status['last_calculation'] = datetime.now().isoformat()
+        # Логируем первые несколько измерений для отладки
+        for i, measurement in enumerate(measurements_list[:3]):
+            logger.debug(f"   📍 Measurement {i}: {measurement.get('anchor_id', 'unknown')} - "
+                         f"dist: {measurement.get('distance', 0):.2f}m, "
+                         f"conf: {measurement.get('distance_confidence', 0):.2f}")
 
-        _emit_position_update(mac, positions[mac])
+        # Группируем измерения по якорям с расширенными данными
+        anchor_measurements = _group_enhanced_measurements(measurements_list)
 
-        logger.info(f"📍 Position calculated for {mac}: ({position['x']:.2f}, {position['y']:.2f}, {position['z']:.2f})")
-        return True
+        logger.debug(f"   📊 Grouped into {len(anchor_measurements)} anchors: {list(anchor_measurements.keys())}")
 
-    logger.warning(f"❌ Failed to calculate position for {mac}")
-    return False
+        if len(anchor_measurements) < 2:
+            logger.debug(f"⚠️ Not enough anchors for {mac}: {len(anchor_measurements)}")
+            return False
+
+        position = trilateration_engine.calculate_position(anchor_measurements)
+
+        if position:
+            # Используем улучшенный расчет уверенности
+            confidence = calculate_enhanced_confidence(anchor_measurements, position)
+
+            positions[mac] = {
+                'position': position,
+                'timestamp': datetime.now().isoformat(),
+                'confidence': confidence,
+                'anchors_used': len(anchor_measurements),
+                'avg_distance_confidence': np.mean(
+                    [m[-1].get('distance_confidence', 0.5) for m in anchor_measurements.values() if m]),
+                'type': devices[mac].get('type', 'unknown') if mac in devices else 'unknown'
+            }
+
+            statistics['position_updates'] += 1
+            system_status['last_calculation'] = datetime.now().isoformat()
+            _emit_position_update(mac, positions[mac])
+
+            logger.info(
+                f"📍 Position calculated for {mac}: ({position['x']:.2f}, {position['y']:.2f}, {position['z']:.2f}) "
+                f"with confidence {confidence:.2f}")
+            return True
+        else:
+            logger.debug(f"❌ Trilateration failed for {mac}")
+            return False
+
+    except Exception as e:
+        logger.error(f"❌ Error calculating position for {mac}: {str(e)}")
+        import traceback
+        logger.error(f"   Traceback: {traceback.format_exc()}")
+        statistics['calculation_errors'] += 1
+        return False
 
 def _emit_position_update(mac, position_data):
     socketio.emit('position_update', {
@@ -610,6 +875,7 @@ def emit_log(message, log_type='info'):
     logger.info(f"📝 {log_type.upper()}: {message}")
     socketio.emit('log_message', log_data)
 
+
 def background_task():
     """Фоновая задача для обслуживания данных системы"""
     logger.info("🔄 Background task started")
@@ -630,12 +896,25 @@ def background_task():
             # Обновление статистики активных якорей
             _update_active_anchors_count()
 
-            # Отправка обновлений
-            socketio.emit('system_status', system_status)
-            socketio.emit('statistics_update', statistics)
-            socketio.emit('anchors_data', anchors)
-            socketio.emit('devices_data', devices)
-            socketio.emit('positions_data', positions)
+            # Отправка обновлений с обработкой ошибок сериализации
+            try:
+                socketio.emit('system_status', system_status)
+                socketio.emit('statistics_update', statistics)
+                socketio.emit('anchors_data', anchors)
+
+                # Сериализуем devices правильно
+                serializable_devices = {}
+                for mac, device in devices.items():
+                    serializable_devices[mac] = device.copy()
+                    # Убеждаемся, что все данные сериализуемы
+                    if 'channels_used' in serializable_devices[mac]:
+                        serializable_devices[mac]['channels_used'] = list(serializable_devices[mac]['channels_used'])
+
+                socketio.emit('devices_data', serializable_devices)
+                socketio.emit('positions_data', positions)
+
+            except Exception as e:
+                logger.error(f"❌ Error emitting data: {e}")
 
         except Exception as e:
             logger.error(f"❌ Background task error: {e}")
@@ -705,22 +984,25 @@ def _cleanup_old_positions(current_time):
         socketio.emit('position_removed', {'device_id': mac})
 
 def _cleanup_old_measurements(current_time):
+    """Очищает старые измерения (теперь это делается автоматически при добавлении новых)"""
+    # Теперь измерения автоматически ограничиваются до 10 последних
+    # Удаляем устройства без измерений
     expired_devices = []
     for mac in list(anchor_data.keys()):
-        anchor_data[mac] = deque(
-            [m for m in anchor_data[mac]
-             if (current_time - datetime.fromisoformat(m['timestamp'])).total_seconds() <= 10],
-            maxlen=10
-        )
-
-        # Если устройство долго не обновлялось, удаляем его
         if len(anchor_data[mac]) == 0:
             expired_devices.append(mac)
 
     for mac in expired_devices:
         if mac in devices:
             del devices[mac]
-            del anchor_data[mac]
+            if mac in anchor_data:
+                del anchor_data[mac]
+            if mac in device_kalman_filters:
+                del device_kalman_filters[mac]
+            if mac in device_channel_data:
+                del device_channel_data[mac]
+            if mac in device_packet_stats:
+                del device_packet_stats[mac]
             logger.debug(f"🧹 Expired device removed: {mac}")
             socketio.emit('device_removed', {'device_id': mac})
 
