@@ -2,20 +2,28 @@
  * Indoor Positioning System - Enhanced with Auto Anchor Detection
  */
 class IndoorPositioningApp {
-    constructor() {
-        this.socket = io();
+        constructor() {
+            this.socket = io();
         this.roomConfig = {
             width: 20,
             height: 15,
             depth: 5
         };
         this.anchorsConfig = {};
+        this.aclConfig = {
+            enabled: false,
+            allowed_macs: [],
+            display_preference: 'ssid'
+        };
         this.anchors = new Map();
         this.devices = new Map();
         this.positions = new Map();
         this.selectedDevice = null;
         this.autoRefreshInterval = null;
         this.isConfigOpen = false;
+
+        this.deviceAnimations = new Map(); // Для хранения текущих анимаций
+        this.animationDuration = 500; // Длительность анимации в мс
 
         this.init();
     }
@@ -27,29 +35,7 @@ class IndoorPositioningApp {
         this.updateStartTime();
         this.startAutoRefresh();
         this.loadConfigurations();
-    }
-
-    handleAnchorUpdate(data) {
-        console.log('Anchor update received:', data);
-
-        // Обновляем данные якоря
-        if (data.anchor_id && data.config) {
-            this.anchors.set(data.anchor_id, data.config);
-
-            // Обновляем отображение на карте
-            const anchorElement = document.querySelector(`[data-anchor-id="${data.anchor_id}"]`);
-            if (anchorElement) {
-                const isActive = data.config.status === 'active';
-
-                anchorElement.className = isActive ? 'anchor-point active' : 'anchor-point inactive';
-
-                const statusText = isActive ? 'АКТИВЕН' : 'НЕАКТИВЕН';
-                const lastUpdate = new Date(data.config.last_update).toLocaleTimeString();
-                anchorElement.title = `${data.anchor_id} (${statusText})\nКоординаты: (${data.config.x}, ${data.config.y}, ${data.config.z})\nПоследнее обновление: ${lastUpdate}`;
-            }
-
-            this.updateAnchorsCount();
-        }
+        this.loadACLConfig();
     }
 
     setupSocketListeners() {
@@ -106,6 +92,13 @@ class IndoorPositioningApp {
             this.addLog('Конфигурация якорей обновлена', 'success');
         });
 
+        this.socket.on('acl_config_updated', (config) => {
+            this.aclConfig = config;
+            this.renderDevicesList();
+            this.renderDevicesOnMap();
+            this.addLog('Настройки отображения обновлены', 'success');
+        });
+
         this.socket.on('anchor_updated', (data) => {
             this.handleAnchorUpdate(data);
         });
@@ -143,15 +136,23 @@ class IndoorPositioningApp {
                 this.renderAnchorsList();
             })
             .catch(error => console.error('Ошибка загрузки конфигурации якорей:', error));
+    }
 
-        // Загрузка начальных данных
-        this.requestInitialData();
+    loadACLConfig() {
+        fetch('/api/config/acl')
+            .then(response => response.json())
+            .then(config => {
+                this.aclConfig = config;
+                this.renderDevicesList();
+                this.renderDevicesOnMap();
+            })
+            .catch(error => console.error('Ошибка загрузки ACL конфигурации:', error));
     }
 
     startAutoRefresh() {
         this.autoRefreshInterval = setInterval(() => {
             this.requestInitialData();
-        }, 2000); // Обновление каждые 2 секунды
+        }, 2000);
     }
 
     stopAutoRefresh() {
@@ -179,6 +180,33 @@ class IndoorPositioningApp {
         return statusElement && statusElement.textContent === 'АКТИВНА';
     }
 
+    // ACL и отображение
+    getDeviceDisplayName(deviceId, deviceInfo) {
+        // Если включено отображение по SSID и есть SSID
+        if (this.aclConfig.display_preference === 'ssid') {
+            if (deviceInfo && deviceInfo.ssid) {
+                const ssid = deviceInfo.ssid;
+                // Не показываем технические названия скрытых сетей
+                if (ssid !== '<Hidden_Network>' && ssid !== '<Unknown_SSID>' && ssid !== '') {
+                    return ssid;
+                }
+            }
+        }
+
+        // Fallback to MAC
+        return this.formatMacAddress(deviceId);
+    }
+
+    isDeviceAllowed(deviceId) {
+        if (!this.aclConfig.enabled) return true;
+
+        // Приводим к верхнему регистру для сравнения
+        const deviceIdUpper = deviceId.toUpperCase();
+        return this.aclConfig.allowed_macs.some(mac =>
+            mac.toUpperCase() === deviceIdUpper
+        );
+    }
+
     // Обновление данных
     updateAnchorsData(anchors) {
         const previousCount = this.anchors.size;
@@ -188,7 +216,6 @@ class IndoorPositioningApp {
         this.renderAnchorsOnMap();
         this.updateAnchorsCount();
 
-        // Логируем изменения
         const currentCount = this.anchors.size;
         if (currentCount > previousCount) {
             this.addLog(`Обнаружены новые якоря: ${currentCount} активных`, 'info');
@@ -204,7 +231,6 @@ class IndoorPositioningApp {
         this.renderDevicesList();
         this.updateDevicesCount();
 
-        // Логируем изменения
         const currentCount = this.devices.size;
         if (currentCount > previousCount) {
             this.addLog(`Обнаружены новые устройства: ${currentCount} всего`, 'info');
@@ -220,6 +246,8 @@ class IndoorPositioningApp {
     }
 
     handlePositionUpdate(data) {
+        if (!this.isDeviceAllowed(data.device_id)) return;
+
         this.positions.set(data.device_id, data);
         this.updateDeviceOnMap(data);
         this.updateDeviceInList(data.device_id, data.position, data.confidence);
@@ -253,64 +281,31 @@ class IndoorPositioningApp {
         }
     }
 
+    handleAnchorUpdate(data) {
+        if (data.anchor_id && data.config) {
+            this.anchors.set(data.anchor_id, data.config);
+            this.updateAnchorOnMap(data.anchor_id, data.config);
+            this.updateAnchorsCount();
+        }
+    }
+
     updateAnchorOnMap(anchorId, anchorData) {
         const anchorElement = document.querySelector(`[data-anchor-id="${anchorId}"]`);
         if (anchorElement) {
             const isActive = anchorData.status === 'active';
-
-            // Обновляем классы
             anchorElement.className = isActive ? 'anchor-point active' : 'anchor-point inactive';
 
-            // Обновляем подсказку
             const statusText = isActive ? 'АКТИВЕН' : 'НЕАКТИВЕН';
             const lastUpdate = new Date(anchorData.last_update).toLocaleTimeString();
             anchorElement.title = `${anchorId} (${statusText})\nКоординаты: (${anchorData.x}, ${anchorData.y}, ${anchorData.z})\nПоследнее обновление: ${lastUpdate}`;
-
-            console.log(`Anchor ${anchorId} updated: ${isActive ? 'active' : 'inactive'}`);
         }
     }
 
-    showAnchorDetails(anchorId) {
-        const anchor = this.anchors.get(anchorId);
-        const config = this.anchorsConfig[anchorId];
-
-        if (!anchor || !config) return;
-
-        const details = `
-            <h3>${anchorId}</h3>
-            <div class="anchor-details">
-                <p><strong>Статус:</strong> <span class="${anchor.status === 'active' ? 'status-active' : 'status-inactive'}">${anchor.status === 'active' ? 'АКТИВЕН' : 'НЕАКТИВЕН'}</span></p>
-                <p><strong>Координаты:</strong> X: ${config.x}, Y: ${config.y}, Z: ${config.z}</p>
-                <p><strong>Последнее обновление:</strong> ${new Date(anchor.last_update).toLocaleString()}</p>
-                <p><strong>Количество измерений:</strong> ${anchor.measurements_count || 0}</p>
-                <p><strong>Включен в системе:</strong> ${config.enabled ? 'Да' : 'Нет'}</p>
-            </div>
-        `;
-
-        // Можно добавить модальное окно или выводить в существующую панель деталей
-        console.log('Anchor details:', details);
-        this.addLog(`Детали якоря ${anchorId}: ${anchor.status === 'active' ? 'активен' : 'неактивен'}`, 'info');
-    }
-
-    debugAnchorsStatus() {
-        console.log('=== ANCHORS DEBUG INFO ===');
-        console.log('Anchors config:', this.anchorsConfig);
-        console.log('Active anchors data:', this.anchors);
-
-        this.anchors.forEach((anchor, anchorId) => {
-            console.log(`Anchor ${anchorId}:`, anchor);
-        });
-        console.log('=== END DEBUG INFO ===');
-    }
-
     handleAnchorRemoved(anchorId) {
-        // Удаляем якорь с карты
         const anchorElement = document.querySelector(`[data-anchor-id="${anchorId}"]`);
         if (anchorElement) {
             anchorElement.remove();
         }
-
-        // Обновляем счетчики
         this.updateAnchorsCount();
     }
 
@@ -353,12 +348,10 @@ class IndoorPositioningApp {
     }
 
     populateConfigForm() {
-        // Заполняем форму конфигурации комнаты
         document.getElementById('room-width').value = this.roomConfig.width;
         document.getElementById('room-height').value = this.roomConfig.height;
         document.getElementById('room-depth').value = this.roomConfig.depth;
 
-        // Заполняем форму конфигурации якорей
         const anchorsContainer = document.getElementById('anchors-config-container');
         anchorsContainer.innerHTML = '';
 
@@ -394,8 +387,38 @@ class IndoorPositioningApp {
             anchorsContainer.appendChild(anchorElement);
         });
 
-        // Очищаем сообщения об ошибках
+        this.renderACLConfig();
         this.clearValidationMessages();
+    }
+
+    renderACLConfig() {
+        const container = document.getElementById('acl-config-container');
+        if (!container) return;
+
+        container.innerHTML = `
+            <div class="config-section">
+                <h3>ACL Фильтрация и Отображение</h3>
+                <div class="config-row">
+                    <label>Включить фильтрацию по MAC:</label>
+                    <input type="checkbox" id="acl-enabled" ${this.aclConfig.enabled ? 'checked' : ''}>
+                </div>
+                <div class="config-row">
+                    <label>Отображать устройства как:</label>
+                    <select id="display-preference">
+                        <option value="ssid" ${this.aclConfig.display_preference === 'ssid' ? 'selected' : ''}>SSID (имя сети)</option>
+                        <option value="mac" ${this.aclConfig.display_preference === 'mac' ? 'selected' : ''}>MAC-адрес</option>
+                    </select>
+                </div>
+                <div class="config-row">
+                    <label>Разрешенные MAC-адреса (по одному в строке):</label>
+                    <textarea id="allowed-macs" rows="6" placeholder="AA:BB:CC:DD:EE:FF&#10;11:22:33:44:55:66">${this.aclConfig.allowed_macs.join('\n')}</textarea>
+                </div>
+                <div class="config-hint">
+                    <strong>Подсказка:</strong> При включенной фильтрации отображаются только устройства из списка выше.
+                    При отключенной фильтрации показываются все устройства.
+                </div>
+            </div>
+        `;
     }
 
     clearValidationMessages() {
@@ -414,7 +437,6 @@ class IndoorPositioningApp {
             ).join('');
             errorContainer.style.display = 'block';
 
-            // Автоматически скрываем ошибки через 5 секунд
             setTimeout(() => {
                 this.clearValidationMessages();
             }, 5000);
@@ -471,9 +493,6 @@ class IndoorPositioningApp {
             depth: parseFloat(document.getElementById('room-depth').value)
         };
 
-        console.log('Saving room config:', config);
-
-        // Валидируем перед сохранением
         this.validateConfig().then(result => {
             if (result.valid) {
                 fetch('/api/config/room', {
@@ -488,23 +507,14 @@ class IndoorPositioningApp {
                     return response.json();
                 })
                 .then(data => {
-                    console.log('Room config response:', data);
-
                     if (data.status === 'success') {
-                        // Обновляем локальную конфигурацию
                         this.roomConfig = data.config;
-
                         this.addLog('Конфигурация комнаты сохранена', 'success');
                         this.clearValidationMessages();
-
-                        // Перерисовываем карту с новой конфигурацией
                         this.renderMap();
-
-                        // Закрываем модальное окно через короткую задержку
                         setTimeout(() => {
                             this.closeConfigModal();
                         }, 1000);
-
                     } else {
                         this.showValidationErrors([data.error || 'Ошибка сохранения конфигурации комнаты']);
                     }
@@ -522,9 +532,7 @@ class IndoorPositioningApp {
     saveAnchorsConfig() {
         const config = {};
 
-        // Собираем данные из формы
         const inputs = document.querySelectorAll('#anchors-config-container input');
-
         inputs.forEach(input => {
             const anchorId = input.dataset.anchor;
             const field = input.dataset.field;
@@ -541,9 +549,6 @@ class IndoorPositioningApp {
             }
         });
 
-        console.log('Saving anchors config:', config);
-
-        // Валидируем перед сохранением
         this.validateConfig().then(result => {
             if (result.valid) {
                 fetch('/api/config/anchors', {
@@ -562,8 +567,6 @@ class IndoorPositioningApp {
                         this.addLog('Конфигурация якорей сохранена', 'success');
                         this.clearValidationMessages();
                         this.closeConfigModal();
-
-                        // Принудительно обновляем данные
                         setTimeout(() => {
                             this.loadConfigurations();
                         }, 500);
@@ -581,21 +584,52 @@ class IndoorPositioningApp {
         });
     }
 
-    // Добавляем метод для отладки
-    printDebugInfo() {
-        console.log('Room config:', this.roomConfig);
-        console.log('Anchors config:', this.anchorsConfig);
-        console.log('Active anchors:', this.anchors);
+    saveACLConfig() {
+        const enabled = document.getElementById('acl-enabled').checked;
+        const displayPreference = document.getElementById('display-preference').value;
+        const allowedMacs = document.getElementById('allowed-macs').value
+            .split('\n')
+            .map(mac => mac.trim().toUpperCase())
+            .filter(mac => mac.length > 0);
+
+        const config = {
+            enabled: enabled,
+            display_preference: displayPreference,
+            allowed_macs: allowedMacs
+        };
+
+        fetch('/api/config/acl', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(config)
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.status === 'success') {
+                this.aclConfig = data.config;
+                this.addLog('Настройки отображения сохранены', 'success');
+                this.renderDevicesList();
+                this.renderDevicesOnMap();
+            } else {
+                this.showValidationErrors([data.error || 'Ошибка сохранения настроек отображения']);
+            }
+        })
+        .catch(error => {
+            console.error('Save ACL config error:', error);
+            this.showValidationErrors(['Ошибка сети при сохранении настроек отображения']);
+        });
     }
 
-    // Остальные методы остаются без изменений
+    // Отрисовка
     renderMap() {
         const map = document.getElementById('map');
         const deviceElements = map.querySelectorAll('.device-point, .device-label, .confidence-circle');
         deviceElements.forEach(element => element.remove());
 
         this.positions.forEach((data, deviceId) => {
-            this.updateDeviceOnMap(data);
+            if (this.isDeviceAllowed(deviceId)) {
+                this.updateDeviceOnMap(data);
+            }
         });
 
         this.renderAnchorsOnMap();
@@ -611,8 +645,6 @@ class IndoorPositioningApp {
             if (!config.enabled) return;
 
             const point = document.createElement('div');
-
-            // Получаем актуальные данные якоря
             const anchorData = this.anchors.get(anchorId);
             const isActive = anchorData && anchorData.status === 'active';
 
@@ -671,6 +703,8 @@ class IndoorPositioningApp {
         container.innerHTML = '';
 
         this.devices.forEach((device, deviceId) => {
+            if (!this.isDeviceAllowed(deviceId)) return;
+
             const position = this.positions.get(deviceId);
             const deviceElement = document.createElement('div');
             deviceElement.className = `device-item ${this.selectedDevice === deviceId ? 'selected' : ''}`;
@@ -684,11 +718,14 @@ class IndoorPositioningApp {
                 confidenceInfo = `Доверие: ${(position.confidence * 100).toFixed(1)}%`;
             }
 
+            const displayName = this.getDeviceDisplayName(deviceId, device);
+
             deviceElement.innerHTML = `
                 <div class="device-header">
-                    <span class="device-mac">${this.formatMacAddress(deviceId)}</span>
+                    <span class="device-name">${displayName}</span>
                     <span class="device-type">${device.type || 'mobile_device'}</span>
                 </div>
+                <div class="device-mac">MAC: ${this.formatMacAddress(deviceId)}</div>
                 <div class="device-position">${positionInfo}</div>
                 <div class="device-confidence">${confidenceInfo}</div>
                 <div class="device-first-seen">
@@ -704,10 +741,39 @@ class IndoorPositioningApp {
         });
     }
 
+    renderDevicesOnMap() {
+        // Создаем Set разрешенных устройств
+        const allowedDevices = new Set();
+
+        this.positions.forEach((data, deviceId) => {
+            if (this.isDeviceAllowed(deviceId)) {
+                allowedDevices.add(deviceId);
+                this.updateDeviceOnMap(data);
+            }
+        });
+
+        // Удаляем устройства которых нет в allowedDevices
+        const devicePoints = document.querySelectorAll('.device-point');
+        devicePoints.forEach(point => {
+            const deviceId = point.getAttribute('data-device-id');
+            if (!allowedDevices.has(deviceId)) {
+                this.removeDeviceFromMap(deviceId);
+            }
+        });
+
+        const confidenceCircles = document.querySelectorAll('.confidence-circle');
+        confidenceCircles.forEach(circle => {
+            const deviceId = circle.getAttribute('data-device-id');
+            if (!allowedDevices.has(deviceId)) {
+                circle.remove();
+            }
+        });
+    }
+
+
     selectDevice(deviceId) {
         this.selectedDevice = deviceId;
 
-        // Обновляем выделение в списке
         document.querySelectorAll('.device-item').forEach(item => {
             item.classList.remove('selected');
         });
@@ -732,10 +798,14 @@ class IndoorPositioningApp {
             return;
         }
 
+        const displayName = this.getDeviceDisplayName(deviceId, device);
+
         detailsContainer.innerHTML = `
             <h3>Детали позиции</h3>
             <div class="device-details">
+                <p><strong>Имя:</strong> ${displayName}</p>
                 <p><strong>MAC адрес:</strong> ${this.formatMacAddress(deviceId)}</p>
+                <p><strong>SSID:</strong> ${device.ssid || 'Неизвестно'}</p>
                 <p><strong>Тип:</strong> ${device.type || 'mobile_device'}</p>
                 <p><strong>Первое обнаружение:</strong> ${new Date(device.first_seen).toLocaleString()}</p>
                 <p><strong>Позиция:</strong> X: ${position.position.x.toFixed(2)}, Y: ${position.position.y.toFixed(2)}, Z: ${position.position.z.toFixed(2)}</p>
@@ -777,6 +847,7 @@ class IndoorPositioningApp {
         let point = document.getElementById(`device-${data.device_id}`);
         let confidenceCircle = document.getElementById(`confidence-${data.device_id}`);
 
+        // Если точки нет - создаем
         if (!point) {
             point = document.createElement('div');
             point.id = `device-${data.device_id}`;
@@ -787,10 +858,10 @@ class IndoorPositioningApp {
             const color = deviceInfo ? deviceInfo.color : '#3498db';
             point.style.background = color;
             point.style.border = `3px solid ${this.darkenColor(color, 20)}`;
+            point.style.transition = `all ${this.animationDuration}ms ease-out`; // ДОБАВЬТЕ ПЕРЕХОД
 
             const label = document.createElement('div');
             label.className = 'device-label';
-            label.textContent = this.formatMacAddress(data.device_id);
             point.appendChild(label);
 
             point.addEventListener('click', (e) => {
@@ -801,17 +872,21 @@ class IndoorPositioningApp {
             container.appendChild(point);
         }
 
+        // Если круга уверенности нет - создаем
         if (!confidenceCircle) {
             confidenceCircle = document.createElement('div');
             confidenceCircle.id = `confidence-${data.device_id}`;
             confidenceCircle.className = 'confidence-circle';
             confidenceCircle.setAttribute('data-device-id', data.device_id);
+            confidenceCircle.style.transition = `all ${this.animationDuration}ms ease-out`; // ДОБАВЬТЕ ПЕРЕХОД
             confidenceContainer.appendChild(confidenceCircle);
         }
 
+        // ОБНОВЛЯЕМ ПОЗИЦИИ С АНИМАЦИЕЙ
         const x = (data.position.x / this.roomConfig.width) * 100;
         const y = (data.position.y / this.roomConfig.height) * 100;
 
+        // Плавное перемещение
         point.style.left = `${x}%`;
         point.style.top = `${y}%`;
 
@@ -827,6 +902,13 @@ class IndoorPositioningApp {
 
         const showConfidence = document.getElementById('show-confidence').checked;
         confidenceCircle.style.display = showConfidence ? 'block' : 'none';
+
+        // ОБНОВЛЯЕМ LABEL С SSID
+        const deviceInfo = this.devices.get(data.device_id);
+        const label = point.querySelector('.device-label');
+        if (label) {
+            label.textContent = this.getDeviceDisplayName(data.device_id, deviceInfo);
+        }
     }
 
     removeDeviceFromMap(deviceId) {
@@ -835,6 +917,27 @@ class IndoorPositioningApp {
 
         if (point) point.remove();
         if (confidenceCircle) confidenceCircle.remove();
+    }
+
+    showAnchorDetails(anchorId) {
+        const anchor = this.anchors.get(anchorId);
+        const config = this.anchorsConfig[anchorId];
+
+        if (!anchor || !config) return;
+
+        const details = `
+            <h3>${anchorId}</h3>
+            <div class="anchor-details">
+                <p><strong>Статус:</strong> <span class="${anchor.status === 'active' ? 'status-active' : 'status-inactive'}">${anchor.status === 'active' ? 'АКТИВЕН' : 'НЕАКТИВЕН'}</span></p>
+                <p><strong>Координаты:</strong> X: ${config.x}, Y: ${config.y}, Z: ${config.z}</p>
+                <p><strong>Последнее обновление:</strong> ${new Date(anchor.last_update).toLocaleString()}</p>
+                <p><strong>Количество измерений:</strong> ${anchor.measurements_count || 0}</p>
+                <p><strong>Включен в системе:</strong> ${config.enabled ? 'Да' : 'Нет'}</p>
+            </div>
+        `;
+
+        console.log('Anchor details:', details);
+        this.addLog(`Детали якоря ${anchorId}: ${anchor.status === 'active' ? 'активен' : 'неактивен'}`, 'info');
     }
 
     // Вспомогательные методы
@@ -892,17 +995,20 @@ class IndoorPositioningApp {
     }
 
     updateAnchorsCount() {
-        // Теперь используем статистику активных якорей с сервера
-        const countElement = document.getElementById('anchors-count');
-        if (countElement) {
-            // Значение будет обновлено через updateStatistics
-        }
+        // Значение обновляется через updateStatistics
     }
 
     updateDevicesCount() {
         const countElement = document.getElementById('devices-count');
         if (countElement) {
-            countElement.textContent = this.devices.size;
+            // Подсчитываем только разрешенные устройства
+            let allowedCount = 0;
+            this.devices.forEach((device, deviceId) => {
+                if (this.isDeviceAllowed(deviceId)) {
+                    allowedCount++;
+                }
+            });
+            countElement.textContent = allowedCount;
         }
     }
 
@@ -959,27 +1065,6 @@ class IndoorPositioningApp {
             })
             .catch(error => console.error('Ошибка загрузки статуса:', error));
     }
-
-    refreshConfigurations() {
-        // Загрузка конфигурации комнаты
-        fetch('/api/config/room')
-            .then(response => response.json())
-            .then(config => {
-                this.roomConfig = config;
-                this.renderMap();
-            })
-            .catch(error => console.error('Ошибка загрузки конфигурации комнаты:', error));
-
-        // Загрузка конфигурации якорей
-        fetch('/api/config/anchors')
-            .then(response => response.json())
-            .then(config => {
-                this.anchorsConfig = config;
-                this.renderAnchorsOnMap();
-                this.renderAnchorsList();
-            })
-            .catch(error => console.error('Ошибка загрузки конфигурации якорей:', error));
-    }
 }
 
 // Глобальные функции
@@ -1001,6 +1086,27 @@ window.saveRoomConfig = () => {
 
 window.saveAnchorsConfig = () => {
     if (app) app.saveAnchorsConfig();
+};
+
+window.saveACLConfig = () => {
+    if (app) app.saveACLConfig();
+};
+
+window.openConfigTab = (tabName) => {
+    document.querySelectorAll('.config-tab').forEach(tab => {
+        tab.classList.remove('active');
+    });
+
+    document.querySelectorAll('.tab-button').forEach(button => {
+        button.classList.remove('active');
+    });
+
+    document.getElementById(tabName).classList.add('active');
+    event.target.classList.add('active');
+
+    if (tabName === 'acl-tab' && app) {
+        app.renderACLConfig();
+    }
 };
 
 window.clearLog = () => {

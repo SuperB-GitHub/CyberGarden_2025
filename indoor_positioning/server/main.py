@@ -79,6 +79,7 @@ logger = logging.getLogger(__name__)
 # Конфигурационные файлы
 CONFIG_FILE = 'room_config.json'
 ANCHORS_FILE = 'anchors_config.json'
+ACL_CONFIG_FILE = 'acl_config.json'
 
 # Стандартная конфигурация
 DEFAULT_ROOM_CONFIG = {
@@ -92,6 +93,15 @@ DEFAULT_ANCHORS_CONFIG = {
     'Якорь_2': {'x': 20, 'y': 0, 'z': 2.5, 'enabled': True},
     'Якорь_3': {'x': 20, 'y': 15, 'z': 2.5, 'enabled': True},
     'Якорь_4': {'x': 0, 'y': 15, 'z': 1.0, 'enabled': True}
+}
+
+DEFAULT_ACL_CONFIG = {
+    "enabled": False,
+    "allowed_macs": [
+        "AA:BB:CC:DD:EE:FF",
+        "11:22:33:44:55:66"
+    ],
+    "display_preference": "ssid"  # или "mac"
 }
 
 # Глобальные хранилища для расширенных данных
@@ -238,9 +248,35 @@ def save_anchors_config():
         logger.error(f"❌ Error saving anchors config: {e}")
         return False
 
+def load_acl_config():
+    global acl_config
+    try:
+        if os.path.exists(ACL_CONFIG_FILE):
+            with open(ACL_CONFIG_FILE, 'r', encoding='utf-8') as f:
+                acl_config = json.load(f)
+            logger.info(f"✅ ACL config loaded from {ACL_CONFIG_FILE}")
+        else:
+            acl_config = DEFAULT_ACL_CONFIG.copy()
+            save_acl_config()
+            logger.info("✅ Default ACL config created")
+    except Exception as e:
+        logger.error(f"❌ Error loading ACL config: {e}")
+        acl_config = DEFAULT_ACL_CONFIG.copy()
+
+def save_acl_config():
+    try:
+        with open(ACL_CONFIG_FILE, 'w', encoding='utf-8') as f:
+            json.dump(acl_config, f, indent=2, ensure_ascii=False)
+        logger.info(f"💾 ACL config saved to {ACL_CONFIG_FILE}")
+        return True
+    except Exception as e:
+        logger.error(f"❌ Error saving ACL config: {e}")
+        return False
+
 # Инициализация конфигураций
 log_system_info()
 load_config()
+load_acl_config()
 
 # Хранилища данных
 anchors = {}  # Активные якоря с временными метками
@@ -333,12 +369,17 @@ def get_anchors_config():
 def get_anchors():
     return jsonify(dict(anchors))
 
+
 @app.route('/api/devices')
 def get_devices():
     try:
-        # Создаем сериализуемую копию devices
+        # Создаем сериализуемую копию devices с применением ACL фильтрации
         serializable_devices = {}
         for mac, device in devices.items():
+            # ПРИМЕНЯЕМ ACL ФИЛЬТРАЦИЮ
+            if not _check_acl_filter(mac):
+                continue
+
             serializable_devices[mac] = device.copy()
             if 'channels_used' in serializable_devices[mac]:
                 serializable_devices[mac]['channels_used'] = list(serializable_devices[mac]['channels_used'])
@@ -348,9 +389,16 @@ def get_devices():
         logger.error(f"❌ Error serializing devices: {e}")
         return jsonify({'error': 'Serialization error'}), 500
 
+
 @app.route('/api/positions')
 def get_positions():
-    return jsonify(dict(positions))
+    # ПРИМЕНЯЕМ ACL ФИЛЬТРАЦИЮ К ПОЗИЦИЯМ
+    filtered_positions = {}
+    for mac, position in positions.items():
+        if _check_acl_filter(mac):
+            filtered_positions[mac] = position
+
+    return jsonify(filtered_positions)
 
 @app.route('/api/status')
 def get_status():
@@ -590,6 +638,61 @@ def receive_anchor_data():
         return jsonify({'error': str(e)}), 500
 
 
+@app.route('/api/config/acl', methods=['GET'])
+def get_acl_config():
+    logger.info("📋 ACL config requested")
+    return jsonify(acl_config)
+
+
+@app.route('/api/config/acl', methods=['POST'])
+def update_acl_config():
+    try:
+        data = request.get_json()
+        logger.info(f"🔄 ACL config update request: {data}")
+
+        if not data:
+            return jsonify({'error': 'No data provided'}), 400
+
+        acl_config.update(data)
+
+        if save_acl_config():
+            emit_log("ACL конфигурация обновлена", 'success')
+            socketio.emit('acl_config_updated', acl_config)
+            logger.info("✅ ACL config updated successfully")
+            return jsonify({'status': 'success', 'config': acl_config})
+        else:
+            logger.error("❌ Failed to save ACL config")
+            return jsonify({'error': 'Failed to save config'}), 500
+    except Exception as e:
+        logger.error(f"❌ Error updating ACL config: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+def _check_acl_filter(mac):
+    """Проверяет, проходит ли устройство по ACL фильтру"""
+    if not acl_config.get('enabled', False):
+        return True
+
+    allowed_macs = acl_config.get('allowed_macs', [])
+    # Приводим MAC к верхнему регистру для сравнения
+    mac_upper = mac.upper() if mac else ""
+    return mac_upper in allowed_macs
+
+
+def get_display_name(device_info, measurement_info):
+    """Возвращает отображаемое имя устройства"""
+    preference = acl_config.get('display_preference', 'ssid')
+
+    if preference == 'ssid':
+        ssid = device_info.get('ssid', '') if device_info else measurement_info.get('ssid', '')
+        if ssid and ssid != '<Hidden_Network>':
+            return ssid
+
+    # Fallback to MAC
+    mac = device_info.get('mac', '') if device_info else measurement_info.get('mac', '')
+    return mac or 'Unknown'
+
+
 def _calculate_channel_consistency(mac):
     """Рассчитывает согласованность использования каналов"""
     if mac not in device_channel_data or len(device_channel_data[mac]) < 2:
@@ -609,15 +712,24 @@ def _process_anchor_measurements(anchor_id, measurements):
     logger.info(f"📊 Processing {len(measurements)} measurements from {anchor_id}")
 
     for measurement in measurements:
-        # Проверяем структуру measurement от маяка
-        if not isinstance(measurement, dict):
-            logger.warning(f"⚠️ Invalid measurement type from anchor: {type(measurement)}")
+        # Проверяем ACL фильтрацию
+        if not _check_acl_filter(measurement.get('mac')):
             continue
 
         mac = measurement.get('mac')
         distance = measurement.get('distance')
 
         if mac and distance is not None:
+            # ПОЛУЧАЕМ SSID ИЗ ИЗМЕРЕНИЯ
+            ssid = measurement.get('ssid', '')
+            hidden_ssid = measurement.get('hidden_ssid', False)
+
+            # Если SSID пустой и сеть скрытая - используем специальную метку
+            if not ssid and hidden_ssid:
+                ssid = '<Hidden_Network>'
+            elif not ssid:
+                ssid = '<Unknown_SSID>'
+
             # Применяем фильтр Калмана к расстоянию
             filtered_distance = device_kalman_filters[mac].update(
                 float(distance),
@@ -656,6 +768,33 @@ def _process_anchor_measurements(anchor_id, measurements):
                 }
             device_packet_stats[mac]['count'] += 1
 
+            # СОЗДАЕМ ИЛИ ОБНОВЛЯЕМ УСТРОЙСТВО С SSID
+            if mac not in devices:
+                devices[mac] = {
+                    'mac': mac,
+                    'ssid': ssid,  # СОХРАНЯЕМ SSID
+                    'hidden_ssid': hidden_ssid,
+                    'first_seen': datetime.now().isoformat(),
+                    'type': 'mobile_device',
+                    'color': _generate_color_from_mac(mac),
+                    'packet_count_total': 0,
+                    'channels_used': [],
+                    'avg_confidence': 0.0
+                }
+                logger.info(f"📱 New device detected: {mac} (SSID: {ssid})")
+            else:
+                # ОБНОВЛЯЕМ SSID ЕСЛИ ПОЛУЧИЛИ НОВЫЙ
+                if devices[mac].get('ssid') != ssid:
+                    devices[mac]['ssid'] = ssid
+                    devices[mac]['hidden_ssid'] = hidden_ssid
+                    logger.info(f"🔄 Device {mac} SSID updated: {ssid}")
+
+            # Обновляем статистику устройства
+            devices[mac]['packet_count_total'] += 1
+            channel = measurement.get('channel', 1)
+            if channel not in devices[mac]['channels_used']:
+                devices[mac]['channels_used'].append(channel)
+
             # Сохраняем обогащенные данные
             enriched_measurement = {
                 'anchor_id': anchor_id,
@@ -672,32 +811,12 @@ def _process_anchor_measurements(anchor_id, measurements):
                 'device_timestamp': measurement.get('device_timestamp')
             }
 
-            # ОГРАНИЧИВАЕМ КОЛИЧЕСТВО ИЗМЕРЕНИЙ (максимум 10)
+            # Ограничиваем количество измерений
             if len(anchor_data[mac]) >= 10:
-                anchor_data[mac].pop(0)  # Удаляем самое старое измерение
+                anchor_data[mac].pop(0)
             anchor_data[mac].append(enriched_measurement)
 
-            if mac not in devices:
-                devices[mac] = {
-                    'mac': mac,
-                    'first_seen': datetime.now().isoformat(),
-                    'type': 'mobile_device',
-                    'color': _generate_color_from_mac(mac),
-                    'packet_count_total': 0,
-                    'channels_used': [],
-                    'avg_confidence': 0.0
-                }
-                logger.info(f"📱 New device detected: {mac}")
-
-            # Обновляем статистику устройства
-            devices[mac]['packet_count_total'] += 1
-            channel = measurement.get('channel', 1)
-            if channel not in devices[mac]['channels_used']:
-                devices[mac]['channels_used'].append(channel)
-
-            logger.debug(f"📏 Device {mac}: distance {corrected_distance:.2f}m "
-                         f"(conf: {distance_confidence:.2f}, ch: {channel}, "
-                         f"packets: {measurement.get('packet_count', 1)})")
+            logger.debug(f"📏 Device {mac} ({ssid}): distance {corrected_distance:.2f}m")
 
 
 def calculate_positions():
@@ -818,7 +937,12 @@ def _calculate_device_position(mac, measurements_list):
         statistics['calculation_errors'] += 1
         return False
 
+
 def _emit_position_update(mac, position_data):
+    # ПРИМЕНЯЕМ ACL ФИЛЬТРАЦИЮ ПЕРЕД ОТПРАВКОЙ
+    if not _check_acl_filter(mac):
+        return
+
     socketio.emit('position_update', {
         'device_id': mac,
         'position': position_data['position'],
@@ -898,16 +1022,24 @@ def background_task():
                 socketio.emit('statistics_update', statistics)
                 socketio.emit('anchors_data', anchors)
 
-                # Сериализуем devices правильно
+                # Сериализуем devices с применением ACL фильтрации
                 serializable_devices = {}
                 for mac, device in devices.items():
-                    serializable_devices[mac] = device.copy()
-                    # Убеждаемся, что все данные сериализуемы
-                    if 'channels_used' in serializable_devices[mac]:
-                        serializable_devices[mac]['channels_used'] = list(serializable_devices[mac]['channels_used'])
+                    if _check_acl_filter(mac):  # ПРИМЕНЯЕМ ФИЛЬТРАЦИЮ
+                        serializable_devices[mac] = device.copy()
+                        if 'channels_used' in serializable_devices[mac]:
+                            serializable_devices[mac]['channels_used'] = list(
+                                serializable_devices[mac]['channels_used'])
 
                 socketio.emit('devices_data', serializable_devices)
-                socketio.emit('positions_data', positions)
+
+                # Сериализуем позиции с применением ACL фильтрации
+                filtered_positions = {}
+                for mac, position in positions.items():
+                    if _check_acl_filter(mac):  # ПРИМЕНЯЕМ ФИЛЬТРАЦИЮ
+                        filtered_positions[mac] = position
+
+                socketio.emit('positions_data', filtered_positions)
 
             except Exception as e:
                 logger.error(f"❌ Error emitting data: {e}")
@@ -1001,6 +1133,7 @@ def _cleanup_old_measurements(current_time):
                 del device_packet_stats[mac]
             logger.debug(f"🧹 Expired device removed: {mac}")
             socketio.emit('device_removed', {'device_id': mac})
+
 
 if __name__ == '__main__':
     logger.info("🚀 Starting Indoor Positioning System...")

@@ -15,6 +15,8 @@ const char* wifi_password = "^74b470T";
 // Расширенная структура для хранения данных устройства
 struct DeviceInfo {
   String mac;
+  String ssid;        // Добавлено поле для SSID
+  bool hidden_ssid;   // Флаг скрытого SSID
   int rssi;
   float distance;
   unsigned long lastSeen;
@@ -151,6 +153,7 @@ void scanForDevices() {
   
   for (int i = 0; i < scanResult; ++i) {
     String mac = WiFi.BSSIDstr(i);
+    String ssid = WiFi.SSID(i);  // Получаем SSID
     int rssi = WiFi.RSSI(i);
     int channel = WiFi.channel(i);
     
@@ -158,7 +161,15 @@ void scanForDevices() {
       continue;
     }
     
-    if (updateDevice(mac, rssi, channel)) {
+    // Определяем, является ли SSID скрытым
+    bool hidden_ssid = (ssid.length() == 0);
+    
+    // Для скрытых сетей используем специальное обозначение
+    if (hidden_ssid) {
+      ssid = "<Hidden_Network>";
+    }
+    
+    if (updateDevice(mac, ssid, hidden_ssid, rssi, channel)) {
       newDevices++;
     } else {
       updatedDevices++;
@@ -172,7 +183,7 @@ void scanForDevices() {
   WiFi.scanDelete();
 }
 
-bool updateDevice(String mac, int rssi, int channel) {
+bool updateDevice(String mac, String ssid, bool hidden_ssid, int rssi, int channel) {
   // Применяем фильтр Калмана к RSSI
   if (kalmanFilters.find(mac) == kalmanFilters.end()) {
     kalmanFilters[mac] = KalmanFilter();
@@ -190,8 +201,15 @@ bool updateDevice(String mac, int rssi, int channel) {
       device.packet_count++;
       device.timestamp = esp_timer_get_time() / 1000; // мс
       
-      Serial.printf("  - Updated device: %s, RSSI: %d (filtered: %.1f), Distance: %.2fm, Channel: %d\n", 
-                   mac.c_str(), rssi, filtered_rssi, device.distance, channel);
+      // Обновляем SSID только если он был скрытым, а теперь стал известным
+      if (device.hidden_ssid && !hidden_ssid) {
+        device.ssid = ssid;
+        device.hidden_ssid = false;
+        Serial.printf("  - Revealed hidden SSID for %s: %s\n", mac.c_str(), ssid.c_str());
+      }
+      
+      Serial.printf("  - Updated device: %s, SSID: %s, RSSI: %d (filtered: %.1f), Distance: %.2fm, Channel: %d\n", 
+                   mac.c_str(), device.ssid.c_str(), rssi, filtered_rssi, device.distance, channel);
       return false;
     }
   }
@@ -199,6 +217,8 @@ bool updateDevice(String mac, int rssi, int channel) {
   // Добавляем новое устройство
   DeviceInfo newDevice;
   newDevice.mac = mac;
+  newDevice.ssid = ssid;
+  newDevice.hidden_ssid = hidden_ssid;
   newDevice.rssi = rssi;
   newDevice.rssi_filtered = filtered_rssi;
   newDevice.channel = channel;
@@ -210,8 +230,8 @@ bool updateDevice(String mac, int rssi, int channel) {
   
   devices.push_back(newDevice);
   
-  Serial.printf("  - NEW DEVICE: %s, RSSI: %d (filtered: %.1f), Distance: %.2fm, Channel: %d\n", 
-               mac.c_str(), rssi, filtered_rssi, newDevice.distance, channel);
+  Serial.printf("  - NEW DEVICE: %s, SSID: %s, RSSI: %d (filtered: %.1f), Distance: %.2fm, Channel: %d\n", 
+               mac.c_str(), ssid.c_str(), rssi, filtered_rssi, newDevice.distance, channel);
   return true;
 }
 
@@ -264,7 +284,9 @@ void sendDataToServer() {
     if(device.active) {
       if(!first) jsonData += ",";
       jsonData += "{\"mac\":\"" + device.mac + 
-                  "\",\"rssi\":" + String(device.rssi) + 
+                  "\",\"ssid\":\"" + device.ssid + 
+                  "\",\"hidden_ssid\":" + String(device.hidden_ssid ? "true" : "false") +
+                  ",\"rssi\":" + String(device.rssi) + 
                   ",\"rssi_filtered\":" + String(device.rssi_filtered, 1) +
                   ",\"distance\":" + String(device.distance, 2) +
                   ",\"channel\":" + String(device.channel) +
@@ -306,7 +328,7 @@ void cleanupOldDevices() {
   
   for(auto it = devices.begin(); it != devices.end();) {
     if(it->active && (currentTime - it->lastSeen > 15000)) {
-      Serial.printf("🗑️ Device removed (timeout): %s\n", it->mac.c_str());
+      Serial.printf("🗑️ Device removed (timeout): %s (SSID: %s)\n", it->mac.c_str(), it->ssid.c_str());
       // Удаляем также фильтр Калмана
       kalmanFilters.erase(it->mac);
       it = devices.erase(it);

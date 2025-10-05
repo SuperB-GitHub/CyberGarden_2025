@@ -140,9 +140,13 @@
     <!-- Модальное окно конфигурации -->
     <div id="config-modal" class="modal">
         <div class="modal-content">
-            <div class="modal-header">
-                <h2>⚙️ Конфигурация системы</h2>
-                <button class="close-btn" onclick="closeConfigModal()">&times;</button>
+            <span class="close" onclick="closeConfigModal()">&times;</span>
+            <h2>Конфигурация системы</h2>
+
+            <div class="config-tabs">
+                <button class="tab-button active" onclick="openConfigTab('room-tab')">Комната</button>
+                <button class="tab-button" onclick="openConfigTab('anchors-tab')">Якоря</button>
+                <button class="tab-button" onclick="openConfigTab('acl-tab')">ACL & Отображение</button>
             </div>
 
             <div class="modal-body">
@@ -180,6 +184,15 @@
                         <!-- Динамически заполняется -->
                     </div>
                     <button class="btn btn-primary" onclick="saveAnchorsConfig()">💾 Сохранить якоря</button>
+                </div>
+
+                <div id="acl-tab" class="config-tab">
+                    <div id="acl-config-container">
+                        <!-- ACL конфигурация будет здесь -->
+                    </div>
+                    <div class="config-actions">
+                        <button class="btn btn-primary" onclick="saveACLConfig()">Сохранить ACL</button>
+                    </div>
                 </div>
             </div>
         </div>

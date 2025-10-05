@@ -868,3 +868,44 @@ body {
     text-align: center;
     font-weight: bold;
 }
+
+.config-tabs {
+    display: flex;
+    margin-bottom: 20px;
+    border-bottom: 1px solid #ddd;
+}
+
+.tab-button {
+    padding: 10px 20px;
+    background: none;
+    border: none;
+    cursor: pointer;
+    border-bottom: 2px solid transparent;
+}
+
+.tab-button.active {
+    border-bottom-color: #007bff;
+    font-weight: bold;
+}
+
+.config-tab {
+    display: none;
+}
+
+.config-tab.active {
+    display: block;
+}
+
+.device-point {
+    transition: all 0.5s ease-out;
+    will-change: left, top;
+}
+
+.confidence-circle {
+    transition: all 0.5s ease-out;
+    will-change: left, top, width, height;
+}
+
+.anchor-point {
+    transition: all 0.3s ease-out;
+}
