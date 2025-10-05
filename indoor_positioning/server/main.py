@@ -147,29 +147,34 @@ def apply_channel_correction(distance, channel, rssi_filtered):
 
 
 def calculate_distance_confidence(rssi_filtered, packet_count, channel_consistency):
-    """Рассчитывает уверенность в измерении расстояния"""
-    # Базовая уверенность по RSSI
-    if rssi_filtered > -50:
+    """Улучшенный расчет уверенности в измерении расстояния."""
+    # Более мягкая оценка по RSSI
+    if rssi_filtered > -45:
         rssi_confidence = 0.95
-    elif rssi_filtered > -65:
+    elif rssi_filtered > -55:
         rssi_confidence = 0.85
+    elif rssi_filtered > -65:
+        rssi_confidence = 0.75
     elif rssi_filtered > -75:
-        rssi_confidence = 0.70
+        rssi_confidence = 0.60
     elif rssi_filtered > -85:
-        rssi_confidence = 0.50
+        rssi_confidence = 0.45
     else:
         rssi_confidence = 0.30
 
-    # Уверенность по количеству пакетов
-    packet_confidence = min(1.0, packet_count / 10.0)
+    # Более мягкая оценка по пакетам
+    packet_confidence = min(1.0, 0.3 + (packet_count / 10.0) * 0.7)
 
-    # Уверенность по стабильности канала
-    channel_confidence = channel_consistency
+    # Общая уверенность (более сбалансированная)
+    total_confidence = (
+            rssi_confidence * 0.6 +  # 60% за RSSI
+            packet_confidence * 0.3 +  # 30% за пакеты
+            channel_consistency * 0.1  # 10% за канал
+    )
 
-    # Общая уверенность (взвешенное среднее)
-    total_confidence = (rssi_confidence * 0.5 +
-                        packet_confidence * 0.3 +
-                        channel_confidence * 0.2)
+    # Гарантированный минимум при хороших условиях
+    if rssi_filtered > -65 and packet_count >= 3:
+        total_confidence = max(total_confidence, 0.6)
 
     return max(0.1, min(1.0, total_confidence))
 
@@ -772,29 +777,22 @@ def _calculate_device_position(mac, measurements_list):
     try:
         logger.debug(f"🎯 Calculating position for {mac} with {len(measurements_list)} measurements")
 
-        # Логируем первые несколько измерений для отладки
-        for i, measurement in enumerate(measurements_list[:3]):
-            logger.debug(f"   📍 Measurement {i}: {measurement.get('anchor_id', 'unknown')} - "
-                         f"dist: {measurement.get('distance', 0):.2f}m, "
-                         f"conf: {measurement.get('distance_confidence', 0):.2f}")
-
         # Группируем измерения по якорям с расширенными данными
         anchor_measurements = _group_enhanced_measurements(measurements_list)
-
-        logger.debug(f"   📊 Grouped into {len(anchor_measurements)} anchors: {list(anchor_measurements.keys())}")
 
         if len(anchor_measurements) < 2:
             logger.debug(f"⚠️ Not enough anchors for {mac}: {len(anchor_measurements)}")
             return False
 
+        # Передаем расчет позиции И уверенности движку трилатерации
         position = trilateration_engine.calculate_position(anchor_measurements)
 
         if position:
-            # Используем улучшенный расчет уверенности
-            confidence = calculate_enhanced_confidence(anchor_measurements, position)
+            # Берем confidence из результата движка
+            confidence = position.get('confidence', 0.5)
 
             positions[mac] = {
-                'position': position,
+                'position': position,  # position уже содержит confidence
                 'timestamp': datetime.now().isoformat(),
                 'confidence': confidence,
                 'anchors_used': len(anchor_measurements),
@@ -817,8 +815,6 @@ def _calculate_device_position(mac, measurements_list):
 
     except Exception as e:
         logger.error(f"❌ Error calculating position for {mac}: {str(e)}")
-        import traceback
-        logger.error(f"   Traceback: {traceback.format_exc()}")
         statistics['calculation_errors'] += 1
         return False
 

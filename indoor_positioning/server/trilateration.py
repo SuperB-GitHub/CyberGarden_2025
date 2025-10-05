@@ -40,14 +40,6 @@ class EnhancedTrilaterationEngine:
                     print(f"   ⚠️  Invalid measurements for anchor {anchor_id}: {type(measurements)}")
                     return None
 
-                # Проверяем первое измерение
-                first_measurement = measurements[0]
-                if not isinstance(first_measurement, dict):
-                    print(f"   ⚠️  Invalid measurement type for anchor {anchor_id}: {type(first_measurement)}")
-                    return None
-
-                print(f"   📏 Measurement keys: {list(first_measurement.keys())}")
-
             # Взвешиваем измерения по уверенности
             weighted_measurements = self._apply_measurement_weights(anchor_measurements)
 
@@ -55,7 +47,14 @@ class EnhancedTrilaterationEngine:
                 print("⚠️  No valid weighted measurements")
                 return None
 
-            print(f"   ✅ Weighted measurements: {len(weighted_measurements)} anchors")
+            print(f"   ✅ Weighted measurements ready: {len(weighted_measurements)} anchors")
+
+            # Проверяем структуру weighted_measurements
+            for anchor_id, data in weighted_measurements.items():
+                if not isinstance(data, dict):
+                    print(f"   ⚠️  Invalid weighted data for {anchor_id}: {type(data)}")
+                    return None
+                print(f"   📋 Weighted data keys for {anchor_id}: {list(data.keys())}")
 
             # Пробуем последовательно разные методы с улучшенными данными
             position = self.enhanced_trilateration_3d(weighted_measurements)
@@ -69,6 +68,15 @@ class EnhancedTrilaterationEngine:
                 print("   🔄 Correcting position")
                 position = self.correct_position(position)
 
+            if position:
+                # Рассчитываем уверенность
+                confidence = calculate_enhanced_confidence(weighted_measurements, position, self.room_config)
+                print(f"   🎯 Final confidence: {confidence:.2f}")
+                position['confidence'] = confidence
+                return position
+            else:
+                confidence = 0.1
+
             return position
 
         except Exception as e:
@@ -78,11 +86,16 @@ class EnhancedTrilaterationEngine:
             return None
 
     def _apply_measurement_weights(self, anchor_measurements: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
-        """Применяет веса к измерениям на основе уверенности и других факторов."""
+        """Применяет веса к измерениям с улучшенной формулой."""
+        print(f"   🔍 Applying weights to {len(anchor_measurements)} anchor measurements")
+
         weighted_data = {}
 
         for anchor_id, measurements in anchor_measurements.items():
+            print(f"   📋 Processing anchor {anchor_id}: {len(measurements)} measurements")
+
             if not measurements or not isinstance(measurements, list):
+                print(f"   ⚠️  No measurements for anchor {anchor_id}")
                 continue
 
             # Берем последнее измерение
@@ -90,34 +103,37 @@ class EnhancedTrilaterationEngine:
 
             # Проверяем структуру измерения
             if not isinstance(latest_measurement, dict):
+                print(f"   ⚠️  Invalid measurement type for anchor {anchor_id}: {type(latest_measurement)}")
                 continue
 
-            # Базовый вес на основе уверенности в расстоянии
-            confidence_weight = latest_measurement.get('distance_confidence', 0.5)
+            print(f"   📝 Measurement keys: {list(latest_measurement.keys())}")
 
-            # Дополнительный вес на основе количества пакетов
-            packet_weight = min(1.0, latest_measurement.get('packet_count', 1) / 10.0)
+            # Базовые параметры
+            distance_confidence = latest_measurement.get('distance_confidence', 0.5)
+            packet_count = latest_measurement.get('packet_count', 1)
+            channel_consistency = latest_measurement.get('channel_consistency', 0.5)
+            rssi_filtered = latest_measurement.get('rssi_filtered', -70)
 
-            # Вес на основе согласованности канала
-            channel_weight = latest_measurement.get('channel_consistency', 0.5)
+            # Упрощенная формула весов
+            confidence_weight = distance_confidence * 0.6
+            packet_weight = min(1.0, packet_count / 5.0) * 0.3
+            channel_weight = channel_consistency * 0.1
 
-            # Общий вес измерения
-            total_weight = (confidence_weight * 0.6 +
-                            packet_weight * 0.25 +
-                            channel_weight * 0.15)
+            total_weight = confidence_weight + packet_weight + channel_weight
+            total_weight = min(1.0, total_weight)
 
             weighted_data[anchor_id] = {
                 'distance': latest_measurement.get('distance', 0),
                 'weight': total_weight,
-                'confidence': confidence_weight,
-                'rssi_filtered': latest_measurement.get('rssi_filtered', -70),
+                'confidence': distance_confidence,  # ЭТО поле важно для calculate_enhanced_confidence!
+                'rssi_filtered': rssi_filtered,
                 'channel': latest_measurement.get('channel', 1),
-                'original_data': latest_measurement
+                'original_data': measurements  # Сохраняем все измерения для отладки
             }
 
-            print(f"   📊 {anchor_id}: distance={latest_measurement.get('distance', 0):.2f}m, "
-                  f"weight={total_weight:.2f}, conf={confidence_weight:.2f}")
+            print(f"   ✅ {anchor_id}: weight={total_weight:.2f}, conf={distance_confidence:.2f}")
 
+        print(f"   📊 Created weighted data for {len(weighted_data)} anchors")
         return weighted_data
 
     def enhanced_trilateration_3d(self, weighted_measurements: Dict[str, Dict[str, Any]]) -> Optional[Dict[str, float]]:
@@ -394,43 +410,69 @@ class EnhancedTrilaterationEngine:
 
 
 def calculate_enhanced_confidence(weighted_measurements: Dict[str, Dict[str, Any]],
-                                  position: Dict[str, float]) -> float:
-    """Улучшенный расчет уверенности с учетом расширенных данных."""
+                                  position: Dict[str, float],
+                                  room_config: Dict[str, Any] = None) -> float:
+    """Упрощенный и надежный расчет уверенности."""
     try:
-        # Базовая уверенность по количеству якорей
+        if not weighted_measurements:
+            return 0.1
+
+        print(f"   🔍 Confidence calculation for {len(weighted_measurements)} anchors")
+
+        # 1. Базовая уверенность по количеству якорей
         anchor_count = len(weighted_measurements)
-        anchor_confidence = min(1.0, anchor_count / 4.0)
+        if anchor_count >= 4:
+            base_confidence = 0.8
+        elif anchor_count == 3:
+            base_confidence = 0.7
+        elif anchor_count == 2:
+            base_confidence = 0.5
+        else:
+            base_confidence = 0.2
 
-        # Уверенность по согласованности измерений
-        total_error = 0
-        total_weight = 0
-
+        # 2. Собираем все confidence из weighted_measurements
+        all_confidences = []
         for anchor_id, data in weighted_measurements.items():
-            if anchor_id in weighted_measurements:
-                anchor_data = weighted_measurements[anchor_id]
-                if 'original_data' in anchor_data:
-                    anchor = anchor_data['original_data']
-                    calculated_dist = np.sqrt(
-                        (position['x'] - anchor['x']) ** 2 +
-                        (position['y'] - anchor['y']) ** 2 +
-                        (position['z'] - anchor['z']) ** 2
-                    )
-                    error = abs(calculated_dist - anchor['distance'])
-                    total_error += error * anchor_data['weight']
-                    total_weight += anchor_data['weight']
+            # data должен быть словарем с полем 'confidence'
+            if isinstance(data, dict):
+                confidence = data.get('confidence', 0.5)
+                all_confidences.append(confidence)
+                print(f"   📊 Anchor {anchor_id}: confidence={confidence:.2f}")
+            else:
+                print(f"   ⚠️  Invalid data type for anchor {anchor_id}: {type(data)}")
+                all_confidences.append(0.3)  # default
 
-        consistency_confidence = 1.0 - (total_error / (total_weight + 0.1)) / 5.0
+        # 3. Средняя уверенность измерений
+        if all_confidences:
+            avg_measurement_confidence = np.mean(all_confidences)
+        else:
+            avg_measurement_confidence = 0.5
 
-        # Уверенность по качеству данных
-        avg_confidence = np.mean([data['confidence'] for data in weighted_measurements.values()])
+        # 4. Простая формула: среднее между базовой и средней уверенностью измерений
+        total_confidence = (base_confidence + avg_measurement_confidence) / 2
 
-        # Общая уверенность
-        total_confidence = (anchor_confidence * 0.3 +
-                            consistency_confidence * 0.4 +
-                            avg_confidence * 0.3)
+        # 5. Бонусы
+        bonus = 1.0
 
-        return max(0.1, min(1.0, total_confidence))
+        # Бонус за высокую среднюю уверенность измерений
+        if avg_measurement_confidence > 0.7:
+            bonus *= 1.1
+
+        # Бонус за много якорей
+        if anchor_count >= 3:
+            bonus *= 1.1
+
+        total_confidence *= bonus
+        total_confidence = max(0.1, min(1.0, total_confidence))
+
+        print(f"   🎯 Confidence: base={base_confidence:.2f}, "
+              f"measurements={avg_measurement_confidence:.2f}, "
+              f"bonus={bonus:.2f}, total={total_confidence:.2f}")
+
+        return total_confidence
 
     except Exception as e:
-        print(f"Ошибка расчета улучшенной уверенности: {e}")
+        print(f"❌ Ошибка расчета уверенности: {e}")
+        import traceback
+        print(f"   Traceback: {traceback.format_exc()}")
         return 0.5

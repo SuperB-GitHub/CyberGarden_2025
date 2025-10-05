@@ -1,43 +1,95 @@
 #include <WiFi.h>
 #include <HTTPClient.h>
+#include <esp_wifi.h>
+#include <vector>
+#include <map>
 
 // Конфигурация сервера
 const char* serverURL = "http://192.168.0.244:5000";
-
-// Координаты якоря
-float anchor_x = 0.0;
-float anchor_y = 15.0;  
-float anchor_z = 2.5;
 String anchor_id = "Якорь_4";
 
-// Данные WiFi для подключения к роутеру
+// Данные WiFi
 const char* wifi_ssid = "DESKTOP-JVL1750 9295";
 const char* wifi_password = "^74b470T";
 
-WiFiClient wifiClient;
-
-// Структура для обнаруженных устройств
+// Расширенная структура для хранения данных устройства
 struct DeviceInfo {
   String mac;
   int rssi;
   float distance;
   unsigned long lastSeen;
   bool active;
+  int channel;
+  float rssi_filtered; // Отфильтрованное значение RSSI
+  int packet_count;    // Количество измерений
+  long timestamp;      // Точное время последнего измерения
 };
 
-DeviceInfo devices[10];
-int maxDevices = 10;
+// Динамический массив вместо фиксированного
+std::vector<DeviceInfo> devices;
+
+// Калибровочные параметры для разных частот
+struct ChannelCalibration {
+  int channel;
+  float n;  // Коэффициент затухания
+  float A;  // RSSI на 1 метре
+};
+
+ChannelCalibration channelCalibrations[] = {
+  {1, 2.2, -45},  // 2.4 GHz
+  {6, 2.3, -45},  // 2.4 GHz  
+  {11, 2.4, -45}, // 2.4 GHz
+  {36, 2.1, -40}, // 5 GHz
+  {40, 2.1, -40}, // 5 GHz
+  {44, 2.1, -40}, // 5 GHz
+  {48, 2.1, -40}  // 5 GHz
+};
+
+// Упрощенный фильтр Калмана для RSSI
+class KalmanFilter {
+private:
+  float Q = 0.1;  // Шум процесса
+  float R = 2.0;  // Шум измерения
+  float P = 1.0;  // Ковариация ошибки
+  float X = 0.0;  // Оценка
+  
+public:
+  float update(float measurement) {
+    // Прогноз
+    P = P + Q;
+    
+    // Коррекция
+    float K = P / (P + R);
+    X = X + K * (measurement - X);
+    P = (1 - K) * P;
+    
+    return X;
+  }
+  
+  void reset() {
+    P = 1.0;
+    X = 0.0;
+  }
+};
+
+std::map<String, KalmanFilter> kalmanFilters;
+
+WiFiClient wifiClient;
 
 void setup() {
   Serial.begin(115200);
   delay(2000);
   
-  Serial.println("🚀 Starting ESP32 Anchor (WiFi Scanner only)...");
+  Serial.println("🚀 Starting ESP32 Anchor (Improved Version)...");
   
-  // Только STA режим - подключаемся к роутеру
+  // Настройка WiFi для лучшего сканирования
   WiFi.mode(WIFI_STA);
   
-  Serial.println("📶 Connecting to WiFi...");
+  // Улучшенные настройки WiFi для точного сканирования
+  esp_wifi_set_protocol(WIFI_IF_STA, WIFI_PROTOCOL_11B | WIFI_PROTOCOL_11G | WIFI_PROTOCOL_11N | WIFI_PROTOCOL_LR);
+  esp_wifi_set_bandwidth(WIFI_IF_STA, WIFI_BW_HT20);
+  
+  Serial.printf("📶 Connecting to WiFi: %s\n", wifi_ssid);
   WiFi.begin(wifi_ssid, wifi_password);
   
   int attempts = 0;
@@ -48,138 +100,176 @@ void setup() {
   }
   
   if (WiFi.status() == WL_CONNECTED) {
-    Serial.println("\n✅ Connected to WiFi!");
-    Serial.print("📡 IP: ");
-    Serial.println(WiFi.localIP());
+    Serial.println("\n✅ WiFi connected successfully!");
+    Serial.printf("  - IP Address: %s\n", WiFi.localIP().toString().c_str());
+    Serial.printf("  - RSSI: %d dBm\n", WiFi.RSSI());
   } else {
-    Serial.println("\n❌ Failed to connect to WiFi");
+    Serial.println("\n❌ WiFi connection failed!");
+    return;
   }
   
-  // Инициализация устройств
-  for(int i = 0; i < maxDevices; i++) {
-    devices[i].active = false;
-  }
+  // Резервируем память для устройств
+  devices.reserve(50);
   
-  Serial.println("✅ System ready for scanning");
+  Serial.println("✅ System initialized and ready for scanning");
 }
 
 void loop() {
-  // Сканируем WiFi сети каждые 2 секунды (было 3)
   static unsigned long lastScan = 0;
-  if (millis() - lastScan > 2000) {
+  unsigned long currentTime = millis();
+  
+  if (currentTime - lastScan > 2000) {
+    Serial.println("\n=== SCAN CYCLE START ===");
     scanForDevices();
     sendDataToServer();
-    lastScan = millis();
+    lastScan = currentTime;
+    Serial.println("=== SCAN CYCLE END ===\n");
   }
   
-  // Очищаем старые устройства каждые 15 секунд (было 10)
   static unsigned long lastCleanup = 0;
-  if (millis() - lastCleanup > 15000) {
+  if (currentTime - lastCleanup > 15000) {
     cleanupOldDevices();
-    lastCleanup = millis();
+    lastCleanup = currentTime;
   }
   
   delay(100);
 }
 
 void scanForDevices() {
-  Serial.println("🔍 Scanning for WiFi devices...");
+  Serial.println("🔍 Starting advanced WiFi scan...");
   
-  int scanResult = WiFi.scanNetworks(false, true); // async, show hidden
+  int scanResult = WiFi.scanNetworks(false, true);
+  Serial.printf("  - Found %d networks\n", scanResult);
   
   if (scanResult == 0) {
-    Serial.println("❌ No networks found");
+    Serial.println("  - No networks found");
     return;
   }
+  
+  int newDevices = 0;
+  int updatedDevices = 0;
   
   for (int i = 0; i < scanResult; ++i) {
     String mac = WiFi.BSSIDstr(i);
     int rssi = WiFi.RSSI(i);
+    int channel = WiFi.channel(i);
     
-    // Игнорируем наши якоря и роутеры
     if (mac.length() == 0 || isOurOwnDevice(mac)) {
       continue;
     }
     
-    // Обновляем или добавляем устройство
-    updateDevice(mac, rssi);
-  }
-  
-  WiFi.scanDelete();
-  printDevicesStatus();
-}
-
-bool isOurOwnDevice(String mac) {
-  // Игнорируем MAC-адреса наших ESP32 якорей
-  String ourMacs[] = {
-    "AA:BB:CC:DD:EE:01", // Якорь_1
-    "AA:BB:CC:DD:EE:02", // Якорь_2  
-    "AA:BB:CC:DD:EE:03", // Якорь_3
-    "AA:BB:CC:DD:EE:04"  // Якорь_4
-  };
-  
-  for (String ourMac : ourMacs) {
-    if (mac == ourMac) {
-      return true;
+    if (updateDevice(mac, rssi, channel)) {
+      newDevices++;
+    } else {
+      updatedDevices++;
     }
   }
-  return false;
+  
+  Serial.printf("  - New devices: %d\n", newDevices);
+  Serial.printf("  - Updated devices: %d\n", updatedDevices);
+  Serial.printf("  - Total active devices: %d\n", devices.size());
+  
+  WiFi.scanDelete();
 }
 
-void updateDevice(String mac, int rssi) {
+bool updateDevice(String mac, int rssi, int channel) {
+  // Применяем фильтр Калмана к RSSI
+  if (kalmanFilters.find(mac) == kalmanFilters.end()) {
+    kalmanFilters[mac] = KalmanFilter();
+  }
+  
+  float filtered_rssi = kalmanFilters[mac].update(rssi);
+  
   // Ищем существующее устройство
-  for(int i = 0; i < maxDevices; i++) {
-    if(devices[i].active && devices[i].mac == mac) {
-      devices[i].rssi = rssi;
-      devices[i].distance = calculateDistance(rssi);
-      devices[i].lastSeen = millis();
-      return;
+  for(auto& device : devices) {
+    if(device.active && device.mac == mac) {
+      device.rssi = rssi;
+      device.rssi_filtered = filtered_rssi;
+      device.distance = calculateDistance(filtered_rssi, channel);
+      device.lastSeen = millis();
+      device.packet_count++;
+      device.timestamp = esp_timer_get_time() / 1000; // мс
+      
+      Serial.printf("  - Updated device: %s, RSSI: %d (filtered: %.1f), Distance: %.2fm, Channel: %d\n", 
+                   mac.c_str(), rssi, filtered_rssi, device.distance, channel);
+      return false;
     }
   }
   
   // Добавляем новое устройство
-  for(int i = 0; i < maxDevices; i++) {
-    if(!devices[i].active) {
-      devices[i].mac = mac;
-      devices[i].rssi = rssi;
-      devices[i].distance = calculateDistance(rssi);
-      devices[i].lastSeen = millis();
-      devices[i].active = true;
-      
-      Serial.print("✅ NEW DEVICE: ");
-      Serial.print(mac);
-      Serial.print(" | RSSI: ");
-      Serial.print(rssi);
-      Serial.print(" dBm | Distance: ");
-      Serial.print(devices[i].distance);
-      Serial.println(" m");
-      return;
+  DeviceInfo newDevice;
+  newDevice.mac = mac;
+  newDevice.rssi = rssi;
+  newDevice.rssi_filtered = filtered_rssi;
+  newDevice.channel = channel;
+  newDevice.distance = calculateDistance(filtered_rssi, channel);
+  newDevice.lastSeen = millis();
+  newDevice.active = true;
+  newDevice.packet_count = 1;
+  newDevice.timestamp = esp_timer_get_time() / 1000;
+  
+  devices.push_back(newDevice);
+  
+  Serial.printf("  - NEW DEVICE: %s, RSSI: %d (filtered: %.1f), Distance: %.2fm, Channel: %d\n", 
+               mac.c_str(), rssi, filtered_rssi, newDevice.distance, channel);
+  return true;
+}
+
+float calculateDistance(float rssi, int channel) {
+  // Получаем калибровочные параметры для канала
+  float n = 2.5; // по умолчанию
+  float A = -45; // по умолчанию
+  
+  for(const auto& cal : channelCalibrations) {
+    if(cal.channel == channel) {
+      n = cal.n;
+      A = cal.A;
+      break;
     }
   }
+  
+  if (rssi >= A) {
+    return 0.1;
+  }
+  
+  // Улучшенная формула с учетом разных частот
+  float distance = pow(10, (A - rssi) / (10 * n));
+  
+  // Корректировка для 5GHz каналов
+  if (channel > 14) {
+    distance *= 0.9; // 5GHz сигналы затухают быстрее
+  }
+  
+  // Ограничения
+  if (distance > 50.0) distance = 50.0;
+  if (distance < 0.1) distance = 0.1;
+  
+  return distance;
 }
 
 void sendDataToServer() {
   if (WiFi.status() != WL_CONNECTED) {
-    Serial.println("❌ WiFi not connected");
+    Serial.println("❌ WiFi not connected, cannot send data");
     return;
   }
   
   HTTPClient http;
   
-  // Формируем JSON с данными измерений
-  String jsonData = "{\"anchor_id\":\"" + anchor_id + 
-                    "\",\"x\":" + String(anchor_x) + 
-                    ",\"y\":" + String(anchor_y) + 
-                    ",\"z\":" + String(anchor_z) + 
-                    ",\"measurements\":[";
+  String jsonData = "{\"anchor_id\":\"" + anchor_id + "\",\"timestamp\":" + 
+                    String(millis()) + ",\"measurements\":[";
   
   bool first = true;
-  for(int i = 0; i < maxDevices; i++) {
-    if(devices[i].active) {
+  
+  for(const auto& device : devices) {
+    if(device.active) {
       if(!first) jsonData += ",";
-      jsonData += "{\"mac\":\"" + devices[i].mac + 
-                  "\",\"rssi\":" + String(devices[i].rssi) + 
-                  ",\"distance\":" + String(devices[i].distance) + "}";
+      jsonData += "{\"mac\":\"" + device.mac + 
+                  "\",\"rssi\":" + String(device.rssi) + 
+                  ",\"rssi_filtered\":" + String(device.rssi_filtered, 1) +
+                  ",\"distance\":" + String(device.distance, 2) +
+                  ",\"channel\":" + String(device.channel) +
+                  ",\"packet_count\":" + String(device.packet_count) +
+                  ",\"device_timestamp\":" + String(device.timestamp) + "}";
       first = false;
     }
   }
@@ -188,20 +278,23 @@ void sendDataToServer() {
   
   String fullURL = String(serverURL) + "/api/anchor_data";
   
-  if (!first) { // Если есть данные
-    Serial.println("📡 Sending data: " + jsonData);
-  }
+  Serial.printf("📡 Sending data to server:\n");
+  Serial.printf("  - URL: %s\n", fullURL.c_str());
+  Serial.printf("  - Active devices: %d\n", devices.size());
   
   http.begin(wifiClient, fullURL);
   http.addHeader("Content-Type", "application/json");
-  http.setTimeout(10000);
+  http.setTimeout(5000);
   
   int httpResponseCode = http.POST(jsonData);
   
   if (httpResponseCode > 0) {
-    Serial.println("✅ Data sent: HTTP " + String(httpResponseCode));
+    Serial.printf("✅ Data sent successfully: HTTP %d\n", httpResponseCode);
+    String response = http.getString();
+    Serial.printf("  - Server response: %s\n", response.c_str());
   } else {
-    Serial.println("❌ Send error: " + String(httpResponseCode));
+    Serial.printf("❌ Send error: %d\n", httpResponseCode);
+    Serial.printf("  - Error: %s\n", http.errorToString(httpResponseCode).c_str());
   }
   
   http.end();
@@ -209,47 +302,35 @@ void sendDataToServer() {
 
 void cleanupOldDevices() {
   unsigned long currentTime = millis();
-  for(int i = 0; i < maxDevices; i++) {
-    if(devices[i].active && (currentTime - devices[i].lastSeen > 15000)) {
-      Serial.print("🗑️ Device removed: ");
-      Serial.println(devices[i].mac);
-      devices[i].active = false;
+  int removedCount = 0;
+  
+  for(auto it = devices.begin(); it != devices.end();) {
+    if(it->active && (currentTime - it->lastSeen > 15000)) {
+      Serial.printf("🗑️ Device removed (timeout): %s\n", it->mac.c_str());
+      // Удаляем также фильтр Калмана
+      kalmanFilters.erase(it->mac);
+      it = devices.erase(it);
+      removedCount++;
+    } else {
+      ++it;
     }
+  }
+  
+  if (removedCount > 0) {
+    Serial.printf("  - Total devices removed: %d\n", removedCount);
   }
 }
 
-void printDevicesStatus() {
-  int activeCount = 0;
-  for(int i = 0; i < maxDevices; i++) {
-    if(devices[i].active) activeCount++;
-  }
+bool isOurOwnDevice(String mac) {
+  String ourMacs[] = {
+    "AA:BB:CC:DD:EE:01", "AA:BB:CC:DD:EE:02", 
+    "AA:BB:CC:DD:EE:03", "AA:BB:CC:DD:EE:04"
+  };
   
-  if (activeCount > 0) {
-    Serial.println("=== DEVICES: " + String(activeCount) + " ===");
-    for(int i = 0; i < maxDevices; i++) {
-      if(devices[i].active) {
-        Serial.print("  ");
-        Serial.print(devices[i].mac);
-        Serial.print(" | RSSI: ");
-        Serial.print(devices[i].rssi);
-        Serial.print(" dBm | ");
-        Serial.print(devices[i].distance);
-        Serial.println(" m");
-      }
+  for (String ourMac : ourMacs) {
+    if (mac == ourMac) {
+      return true;
     }
   }
-}
-
-float calculateDistance(int rssi) {
-  float n = 2.5;
-  float A = -45;
-  
-  if (rssi >= A) return 0.1;
-  
-  float distance = pow(10, (A - rssi) / (10 * n));
-  
-  if (distance > 20.0) distance = 20.0;
-  if (distance < 0.1) distance = 0.1;
-  
-  return distance;
+  return false;
 }
