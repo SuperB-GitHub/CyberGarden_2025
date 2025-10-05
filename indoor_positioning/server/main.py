@@ -221,6 +221,42 @@ def get_status():
         'statistics': statistics
     })
 
+
+def _update_active_anchors_from_config():
+    """Обновляет активные якоря из конфигурации"""
+    current_time = datetime.now().isoformat()
+
+    for anchor_id, config in anchors_config.items():
+        if config.get('enabled', True):
+            # Если якорь уже активен - обновляем координаты
+            if anchor_id in anchors:
+                anchors[anchor_id].update({
+                    'x': config['x'],
+                    'y': config['y'],
+                    'z': config['z'],
+                    'last_update': current_time
+                })
+                logger.debug(f"🔄 Updated active anchor {anchor_id} coordinates")
+            else:
+                # Если якорь не активен - создаем новую запись
+                anchors[anchor_id] = {
+                    'x': config['x'],
+                    'y': config['y'],
+                    'z': config['z'],
+                    'last_update': current_time,
+                    'status': 'inactive',  # Будет активен после получения данных
+                    'enabled': True,
+                    'measurements_count': 0
+                }
+                logger.debug(f"🆕 Created new anchor {anchor_id} from config")
+
+        # Если якорь отключен в конфигурации - удаляем из активных
+        elif anchor_id in anchors and not config.get('enabled', True):
+            del anchors[anchor_id]
+            logger.debug(f"🗑️ Removed disabled anchor {anchor_id} from active anchors")
+
+    logger.info(f"📊 Active anchors after config update: {list(anchors.keys())}")
+
 # API для обновления конфигураций
 @app.route('/api/config/room', methods=['POST'])
 def update_room_config():
@@ -244,15 +280,24 @@ def update_room_config():
         # Сохраняем новую конфигурацию
         room_config.update(data)
         if save_room_config():
-            # Обновляем движок трилатерации
+            # ОБНОВЛЯЕМ АКТИВНЫЕ ЯКОРЯ С НОВЫМИ КООРДИНАТАМИ
+            _update_active_anchors_from_config()
+
+            # ОБНОВЛЯЕМ ДВИЖОК ТРИЛАТЕРАЦИИ С АКТУАЛЬНЫМИ ДАННЫМИ
+            enabled_anchors = {k: v for k, v in anchors_config.items() if v.get('enabled', True)}
             trilateration_engine.update_room_config({
                 'width': room_config['width'],
                 'height': room_config['height'],
-                'anchors': {k: v for k, v in anchors_config.items() if v['enabled']}
+                'anchors': enabled_anchors
             })
+
+            logger.info(
+                f"✅ Room config updated: width={room_config['width']}, height={room_config['height']}, depth={room_config['depth']}")
+            logger.info(f"📊 Trilateration engine updated with {len(enabled_anchors)} anchors")
 
             emit_log(f"Конфигурация комнаты обновлена: {room_config}", 'success')
             socketio.emit('room_config_updated', room_config)
+            socketio.emit('anchors_data', anchors)
             logger.info("✅ Room config updated successfully")
             return jsonify({'status': 'success', 'config': room_config})
         else:
@@ -261,6 +306,7 @@ def update_room_config():
     except Exception as e:
         logger.error(f"❌ Error updating room config: {e}")
         return jsonify({'error': str(e)}), 500
+
 
 @app.route('/api/config/anchors', methods=['POST'])
 def update_anchors_config():
@@ -281,16 +327,29 @@ def update_anchors_config():
         anchors_config.clear()
         anchors_config.update(data)
 
-        if save_anchors_config():
-            # Обновляем движок трилатерации
-            trilateration_engine.update_room_config({
-                'width': room_config['width'],
-                'height': room_config['height'],
-                'anchors': {k: v for k, v in anchors_config.items() if v['enabled']}
-            })
+        # ОБНОВЛЯЕМ АКТИВНЫЕ ЯКОРЯ С НОВЫМИ КООРДИНАТАМИ
+        _update_active_anchors_from_config()
 
+        # ОБНОВЛЯЕМ ДВИЖОК ТРИЛАТЕРАЦИИ
+        enabled_anchors = {k: v for k, v in anchors_config.items() if v.get('enabled', True)}
+        trilateration_engine.update_room_config({
+            'width': room_config['width'],
+            'height': room_config['height'],
+            'anchors': enabled_anchors
+        })
+
+        # ЛОГИРУЕМ ИЗМЕНЕНИЯ
+        logger.info(f"🔧 Anchors config updated: {len(enabled_anchors)} enabled anchors")
+        logger.info(f"📊 Trilateration engine updated with new anchors configuration")
+
+        for anchor_id, new_config in data.items():
+            if anchor_id in enabled_anchors:
+                logger.info(f"📍 Anchor {anchor_id}: ({new_config['x']}, {new_config['y']}, {new_config['z']})")
+
+        if save_anchors_config():
             emit_log("Конфигурация якорей обновлена", 'success')
             socketio.emit('anchors_config_updated', anchors_config)
+            socketio.emit('anchors_data', anchors)
             logger.info("✅ Anchors config updated successfully")
             return jsonify({'status': 'success', 'config': anchors_config})
         else:
@@ -350,19 +409,31 @@ def receive_anchor_data():
             logger.warning(f"❌ Anchor {anchor_id} is disabled")
             return jsonify({'error': 'Anchor disabled'}), 400
 
-        # Обновляем информацию о якоре (помечаем как активный)
+        # ОБНОВЛЯЕМ ИНФОРМАЦИЮ О ЯКОРЕ С АКТУАЛЬНЫМИ КООРДИНАТАМИ ИЗ КОНФИГУРАЦИИ
         anchor_config = anchors_config[anchor_id]
-        anchors[anchor_id] = {
-            'x': anchor_config['x'],
-            'y': anchor_config['y'],
-            'z': anchor_config['z'],
-            'last_update': datetime.now().isoformat(),
-            'status': 'active',
-            'enabled': True,
-            'measurements_count': len(measurements)
-        }
+        if anchor_id in anchors:
+            # Обновляем существующий якорь
+            anchors[anchor_id].update({
+                'x': anchor_config['x'],
+                'y': anchor_config['y'],
+                'z': anchor_config['z'],
+                'last_update': datetime.now().isoformat(),
+                'status': 'active',
+                'measurements_count': len(measurements)
+            })
+        else:
+            # Создаем новый активный якорь
+            anchors[anchor_id] = {
+                'x': anchor_config['x'],
+                'y': anchor_config['y'],
+                'z': anchor_config['z'],
+                'last_update': datetime.now().isoformat(),
+                'status': 'active',
+                'enabled': True,
+                'measurements_count': len(measurements)
+            }
 
-        logger.info(f"✅ Anchor {anchor_id} marked as active with {len(measurements)} measurements")
+        logger.info(f"✅ Anchor {anchor_id} updated with coordinates ({anchor_config['x']}, {anchor_config['y']}, {anchor_config['z']})")
 
         # Обрабатываем измерения
         _process_anchor_measurements(anchor_id, measurements)
@@ -405,9 +476,16 @@ def _process_anchor_measurements(anchor_id, measurements):
                 }
                 logger.info(f"📱 New device detected: {mac}")
 
+
 def calculate_positions():
     try:
         logger.info(f"🎯 Starting position calculation for {len(anchor_data)} devices")
+
+        # ЛОГИРУЕМ АКТУАЛЬНЫЕ КООРДИНАТЫ ЯКОРЕЙ ИЗ КОНФИГУРАЦИИ
+        enabled_anchors = {k: v for k, v in anchors_config.items() if v.get('enabled', True)}
+        logger.info(f"📊 Using anchors config: {len(enabled_anchors)} enabled anchors")
+        for anchor_id, config in enabled_anchors.items():
+            logger.debug(f"📍 Anchor {anchor_id}: ({config['x']}, {config['y']}, {config['z']})")
 
         calculated_positions = 0
         for mac, measurements_list in anchor_data.items():
@@ -440,12 +518,20 @@ def _group_recent_measurements(measurements_list):
 
     return anchor_measurements
 
+
 def _calculate_device_position(mac, anchor_measurements):
     avg_distances = {}
     for anchor_id, distances in anchor_measurements.items():
         avg_distances[anchor_id] = sum(distances) / len(distances)
 
     logger.debug(f"📐 Calculating position for {mac} using anchors: {list(avg_distances.keys())}")
+
+    # ЛОГИРУЕМ КООРДИНАТЫ ЯКОРЕЙ, ИСПОЛЬЗУЕМЫХ В РАСЧЕТЕ
+    for anchor_id in avg_distances.keys():
+        if anchor_id in anchors_config:
+            config = anchors_config[anchor_id]
+            logger.debug(
+                f"   📍 {anchor_id}: ({config['x']}, {config['y']}, {config['z']}) -> {avg_distances[anchor_id]:.2f}m")
 
     position = trilateration_engine.calculate_position(avg_distances)
 

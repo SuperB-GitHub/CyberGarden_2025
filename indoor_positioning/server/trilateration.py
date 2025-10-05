@@ -18,6 +18,11 @@ class TrilaterationEngine:
     def __init__(self, room_config: Dict[str, Any]) -> None:
         self.room_config = room_config
 
+    def update_room_config(self, room_config: Dict[str, Any]) -> None:
+        """Обновляет конфигурацию комнаты и якорей."""
+        self.room_config = room_config
+        print(f"🔄 Trilateration engine updated: room {room_config['width']}x{room_config['height']}, {len(room_config['anchors'])} anchors")
+
     def calculate_position(self, anchor_distances: Dict[str, float]) -> Optional[Dict[str, float]]:
         """Основная функция расчета позиции с автоматическим выбором метода."""
         try:
