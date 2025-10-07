@@ -10,9 +10,8 @@ Indoor Positioning System - Enhanced Positioning Evaluations Module
 
 import numpy as np
 import logging
-from typing import Dict, List, Tuple, Optional, Any
+from typing import Dict, Optional, Any
 from scipy.optimize import minimize
-import numpy.linalg as la
 
 logger = logging.getLogger(__name__)
 

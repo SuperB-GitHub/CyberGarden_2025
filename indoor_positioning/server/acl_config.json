@@ -1,7 +1,8 @@
 {
   "enabled": true,
   "allowed_macs": [
-    "00:4B:12:38:36:A1"
+    "00:4B:12:38:36:A1",
+    "F2:50:AD:A4:E5:72"
   ],
   "display_preference": "ssid"
 }
