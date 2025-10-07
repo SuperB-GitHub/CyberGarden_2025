@@ -114,11 +114,8 @@ sudo create_ap wlan0 eth0 "Название сети" "Пароль"
 // КОНФИГУРАЦИЯ СЕРВЕРА
 const char* serverURL = "http://192.168.0.244:5000"; // IP ноутбука
 
-// КООРДИНАТЫ ЯКОРЯ (уникальны для каждого)
-float anchor_x = 0.0;    // X координата
-float anchor_y = 0.0;    // Y координата
-float anchor_z = 2.5;    // Z координата (высота)
-String anchor_id = "Якорь_1"; // Уникальный ID
+// Уникальный ID якоря
+String anchor_id = "Якорь_1";
 
 // ПОДКЛЮЧЕНИЕ К HOTSPOT
 const char* wifi_ssid = ""; // SSID HotSpot
