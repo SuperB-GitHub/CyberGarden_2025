@@ -263,16 +263,50 @@ python main.py
 ### Формула преобразования RSSI в расстояние
 
 ```cpp
-float calculateDistance(int rssi) {
-  float n = 2.5;    // Коэффициент затухания
-  float A = -45;    // RSSI на расстоянии 1 метр
+// Калибровочные параметры для разных частот
+struct ChannelCalibration {
+  int channel;
+  float n;  // Коэффициент затухания
+  float A;  // RSSI на 1 метре
+};
+
+ChannelCalibration channelCalibrations[] = {
+  {1, 2.2, -45},  // 2.4 GHz
+  {6, 2.3, -45},  // 2.4 GHz  
+  {11, 2.4, -45}, // 2.4 GHz
+  {36, 2.1, -40}, // 5 GHz
+  {40, 2.1, -40}, // 5 GHz
+  {44, 2.1, -40}, // 5 GHz
+  {48, 2.1, -40}  // 5 GHz
+};
+
+float calculateDistance(float rssi, int channel) {
+  // Получаем калибровочные параметры для канала
+  float n = 2.5; // по умолчанию
+  float A = -45; // по умолчанию
   
-  if (rssi >= A) return 0.1;
+  for(const auto& cal : channelCalibrations) {
+    if(cal.channel == channel) {
+      n = cal.n;
+      A = cal.A;
+      break;
+    }
+  }
   
+  if (rssi >= A) {
+    return 0.1;
+  }
+  
+  // Улучшенная формула с учетом разных частот
   float distance = pow(10, (A - rssi) / (10 * n));
   
-  // Ограничение диапазона
-  if (distance > 20.0) distance = 20.0;
+  // Корректировка для 5GHz каналов
+  if (channel > 14) {
+    distance *= 0.9; // 5GHz сигналы затухают быстрее
+  }
+  
+  // Ограничения
+  if (distance > 50.0) distance = 50.0;
   if (distance < 0.1) distance = 0.1;
   
   return distance;
