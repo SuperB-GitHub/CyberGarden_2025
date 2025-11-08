@@ -32,7 +32,7 @@
 
 ## 🏗 Архитектура системы
 
-<img width="3840" height="325" alt="Диаграмма" src="https://github.com/user-attachments/assets/91adbd85-c0ca-4ba8-abc5-a5fa9137ed1d" />
+<img width="1144" height="1002" alt="Архитектура системы" src="https://github.com/user-attachments/assets/8621a302-19ba-4ddc-ba67-4ea2483bbd7c" />
 
 ## 📋 Требования
 
