@@ -2,7 +2,7 @@
 
 Система позиционирования в помещении на основе WiFi трилатерации с использованием ESP32 модулей в качестве якорей.
 
-<img width="1920" height="1080" alt="image_2025-10-04_14-36-26" src="https://github.com/user-attachments/assets/a5e66ad3-ee0b-4418-a976-a027f16eab53" />
+<img width="1908" height="1005" alt="Интерфейс веб-приложения" src="https://github.com/user-attachments/assets/624f1426-332b-4168-a346-bf901bcf7a74" />
 
 ## 📋 Оглавление
 
