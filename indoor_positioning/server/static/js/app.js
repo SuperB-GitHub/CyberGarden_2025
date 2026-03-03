@@ -24,6 +24,7 @@ class IndoorPositioningApp {
 
         this.deviceAnimations = new Map(); // Для хранения текущих анимаций
         this.animationDuration = 500; // Длительность анимации в мс
+        this.anchorCounter = 1;
 
         this.init();
     }
@@ -36,6 +37,7 @@ class IndoorPositioningApp {
         this.startAutoRefresh();
         this.loadConfigurations();
         this.loadACLConfig();
+        this.initOsmMap();
     }
 
     setupSocketListeners() {
@@ -1065,6 +1067,106 @@ class IndoorPositioningApp {
             })
             .catch(error => console.error('Ошибка загрузки статуса:', error));
     }
+    // ────────────────────────────────────────────────
+    // Инициализация карты OpenLayers (OpenStreetMap)
+    // ────────────────────────────────────────────────
+    initOsmMap() {
+        const mapElement = document.getElementById('osm-map');
+        if (!mapElement) {
+            console.warn('Элемент #osm-map не найден');
+            return;
+        }
+
+        if (this.osmMap) {
+            this.osmMap.updateSize();
+            return;
+        }
+
+        // Центр — Ростов-на-Дону
+        const centerLonLat = [39.720, 47.222];
+
+        this.osmMap = new ol.Map({
+            target: 'osm-map',
+            layers: [
+                new ol.layer.Tile({
+                    source: new ol.source.OSM()
+                })
+            ],
+            view: new ol.View({
+                center: ol.proj.fromLonLat(centerLonLat),
+                zoom: 15.5
+            }),
+            controls: ol.control.defaults.defaults({
+                attribution: true,
+                zoom: true,
+                rotate: false
+            })
+        });
+
+        this.anchorVectorSource = new ol.source.Vector();
+        const anchorLayer = new ol.layer.Vector({
+            source: this.anchorVectorSource,
+            style: new ol.style.Style({
+                image: new ol.style.Circle({
+                    radius: 9,
+                    fill: new ol.style.Fill({ color: '#27ae60' }),
+                    stroke: new ol.style.Stroke({ color: '#ffffff', width: 3 })
+                })
+            })
+        });
+        this.osmMap.addLayer(anchorLayer);
+
+        // Клик по карте → добавление якоря
+        this.osmMap.on('singleclick', (evt) => {
+            const coordinate = ol.proj.transform(evt.coordinate, 'EPSG:3857', 'EPSG:4326');
+            const lon = coordinate[0].toFixed(6);
+            const lat = coordinate[1].toFixed(6);
+
+            // Автоматическое имя с текущим счётчиком
+            const defaultName = `Якорь_${this.anchorCounter}`;
+            const name = prompt('Введите имя якоря:', defaultName);
+
+            if (!name || name.trim() === '') return;
+
+            const cleanName = name.trim();
+
+            // Увеличиваем счётчик только если имя было сгенерировано автоматически
+            // или если такого якоря ещё нет
+            if (cleanName === defaultName || !this.anchorsConfig[cleanName]) {
+                this.anchorCounter++;
+            }
+
+            this.addAnchorToSystem(cleanName, lon, lat);
+
+            const feature = new ol.Feature({
+                geometry: new ol.geom.Point(evt.coordinate)
+            });
+            feature.set('anchorId', cleanName);
+            this.anchorVectorSource.addFeature(feature);
+
+            this.addLog(`Добавлен якорь ${cleanName} на карте: ${lat}, ${lon}`, 'success');
+        });
+
+        setTimeout(() => this.osmMap.updateSize(), 600);
+
+        console.log('Карта OpenLayers с поддержкой добавления якорей инициализирована');
+        this.addLog('Карта OpenStreetMap загружена (Ростов-на-Дону центр)', 'success');
+    }
+
+    addAnchorToSystem(name, lon, lat) {
+        if (!this.anchorsConfig) this.anchorsConfig = {};
+
+        this.anchorsConfig[name] = {
+            name: name,
+            lon: parseFloat(lon),
+            lat: parseFloat(lat),
+            enabled: true,
+            // можно добавить x/y/z позже, если нужна конвертация
+        };
+
+        console.log(`Новый якорь сохранён: ${name} → lon: ${lon}, lat: ${lat}`);
+        // Здесь в будущем можно добавить отправку на сервер
+    }
 }
 
 // Глобальные функции
@@ -1123,6 +1225,10 @@ window.clearLog = () => {
     }
 };
 
+window.toggleOsmMap = () => {
+    const cb = document.getElementById('show-osm-map');
+    if (app && cb) app.toggleOsmMap(cb.checked);
+};
 // Инициализация приложения
 let app;
 document.addEventListener('DOMContentLoaded', () => {

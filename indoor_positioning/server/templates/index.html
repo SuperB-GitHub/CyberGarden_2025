@@ -6,6 +6,9 @@
     <title>Система позиционирования в помещении</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
+    <!-- OpenLayers -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/ol@v10.5.0/ol.css">
+    <script src="https://cdn.jsdelivr.net/npm/ol@v10.5.0/dist/ol.js"></script>
 </head>
 <body>
     <div class="container">
@@ -135,68 +138,24 @@
                 </div>
             </div>
         </div>
-    </div>
 
-    <!-- Модальное окно конфигурации -->
-    <div id="config-modal" class="modal">
-        <div class="modal-content">
-            <span class="close" onclick="closeConfigModal()">&times;</span>
-            <h2>Конфигурация системы</h2>
-
-            <div class="config-tabs">
-                <button class="tab-button active" onclick="openConfigTab('room-tab')">Комната</button>
-                <button class="tab-button" onclick="openConfigTab('anchors-tab')">Якоря</button>
-                <button class="tab-button" onclick="openConfigTab('acl-tab')">ACL & Отображение</button>
+        <!-- Карта OpenStreetMap внизу страницы -->
+        <div class="map-section">
+            <div class="map-section-header">
+                <h2>🗺️ Карта расположения помещения (OpenStreetMap + OpenLayers)</h2>
+                <label class="toggle-label">
+                    <input type="checkbox" id="show-osm-map" checked onchange="window.toggleOsmMap()">
+                    Показывать карту
+                </label>
             </div>
-
-            <div class="modal-body">
-                <!-- Сообщения об ошибках -->
-                <div class="config-errors" id="config-errors"></div>
-
-                <div class="config-section">
-                    <h3>Размеры комнаты</h3>
-                    <div class="config-form">
-                        <div class="config-row">
-                            <label>Ширина (м):</label>
-                            <input type="number" id="room-width" step="0.1" min="1" max="100">
-                            <div class="validation-hint">Макс: 100м</div>
-                        </div>
-                        <div class="config-row">
-                            <label>Длина (м):</label>
-                            <input type="number" id="room-height" step="0.1" min="1" max="100">
-                            <div class="validation-hint">Макс: 100м</div>
-                        </div>
-                        <div class="config-row">
-                            <label>Высота (м):</label>
-                            <input type="number" id="room-depth" step="0.1" min="1" max="20">
-                            <div class="validation-hint">Макс: 20м</div>
-                        </div>
-                        <button class="btn btn-primary" onclick="saveRoomConfig()">💾 Сохранить размеры</button>
-                    </div>
-                </div>
-
-                <div class="config-section">
-                    <h3>Конфигурация якорей</h3>
-                    <div class="validation-hint" style="margin-bottom: 15px;">
-                        Для работы системы необходимо минимум 2 активных якоря
-                    </div>
-                    <div id="anchors-config-container" class="anchors-config-container">
-                        <!-- Динамически заполняется -->
-                    </div>
-                    <button class="btn btn-primary" onclick="saveAnchorsConfig()">💾 Сохранить якоря</button>
-                </div>
-
-                <div id="acl-tab" class="config-tab">
-                    <div id="acl-config-container">
-                        <!-- ACL конфигурация будет здесь -->
-                    </div>
-                    <div class="config-actions">
-                        <button class="btn btn-primary" onclick="saveACLConfig()">Сохранить ACL</button>
-                    </div>
-                </div>
-            </div>
+            <div id="osm-map" class="osm-map"></div>
         </div>
+
     </div>
+
+    <!-- OpenLayers -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/ol@v10.5.0/ol.css">
+    <script src="https://cdn.jsdelivr.net/npm/ol@v10.5.0/dist/ol.js"></script>
 
     <script src="{{ url_for('static', filename='js/app.js') }}"></script>
 </body>
